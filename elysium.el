@@ -27,14 +27,23 @@
 ;; This package extends on gptel.el.  It uses that package to generate code
 ;; suggestions based on the user's request.  Those code suggestions will then
 ;; automatically be applied to the buffer in the format of a git merge.
+;; After applying changes, it enters smerge-mode and provides a transient menu
+;; to approve, reject, or retry with a new query.
 
 ;;; Code:
 (require 'gptel)
 (require 'smerge-mode)
+(require 'transient)
+(require 'diff-mode)
 
 (defgroup elysium nil
   "Apply code changes using gptel."
   :group 'hypermedia)
+
+(defcustom elysium-apply-changes-hook nil
+  "Hook run after code changes have been applied on a buffer."
+  :group 'elysium
+  :type 'hook)
 
 (defcustom elysium-window-size 0.33
   "Size of the elysium chat window as a fraction of the frame.
@@ -53,63 +62,49 @@ Must be a number between 0 and 1, exclusive."
                  (const :tag "Vertical" vertical)
                  (const :tag "None" nil)))
 
-(defcustom elysium-apply-changes-hook nil
-  "Hook run after code changes have been applied on a buffer."
+
+(defvar elysium--chat-buffer nil
+  "Buffer used for LLM interaction.")
+
+(defvar elysium--last-query nil
+  "The last query sent to the LLM.")
+
+(defvar elysium--last-code-buffer nil
+  "The buffer that was last modified by Elysium.")
+
+(defcustom elysium-debug-mode nil
+  "When non-nil, log LLM responses and other debug information."
   :group 'elysium
-  :type 'hook)
+  :type 'boolean)
 
-(defvar elysium--chat-buffer nil)
+(defcustom elysium-debug-buffer-name "*elysium-debug*"
+  "Name of the buffer for debug logging."
+  :group 'elysium
+  :type 'string)
 
-(defvar elysium-base-prompt
+
+(setq elysium-base-prompt
   (concat
-   ;; The prompt is originally from avante.nvim:
-   ;; https://github.com/yetone/avante.nvim/blob/main/lua/avante/llm.lua
-   "Your primary task is to suggest code modifications with precise line number ranges. Follow these instructions meticulously:\n"
-
-   "1. Carefully analyze the original code, paying close attention to its structure and line numbers. Line numbers start from 1 and include ALL lines, even empty ones.\n"
-
-   "2. When suggesting modifications:\n"
-   "a. Use the language in the question to reply. If there are non-English parts in the question, use the language of those parts.\n"
-   "b. Explain why the change is necessary or beneficial.\n"
-   "c. If an image is provided, make sure to use the image in conjunction with the code snippet.\n"
-   "d. Provide the exact code snippet to be replaced using this format:\n"
-
-   "Replace lines: {{start_line}}-{{end_line}}\n"
-   ;; We don't need the language here but if we don't specify it then some LLMs might provide it and some might not.
-   ;; So it's better to mandate it and filter it later
-   "```{{language}}\n"
-   "{{suggested_code}}\n"
-   "```\n"
-   "{{Explanation of the changes}}"
-
-   "3. Crucial guidelines for suggested code snippets:\n"
-   "- Only apply the change(s) suggested by the most recent assistant message (before your generation).\n"
-   "- Do not make any unrelated changes to the code.\n"
-   "- Produce a valid full rewrite of the entire original file without skipping any lines. Do not be lazy!\n"
-   "- Do not arbitrarily delete pre-existing comments/empty Lines.\n"
-   "- Do not omit large parts of the original file for no reason.\n"
-   "- Do not omit any needed changes from the requisite messages/code blocks.\n"
-   "- If there is a clicked code block, bias towards just applying that (and applying other changes implied).\n"
-   "- Please keep your suggested code changes minimal, and do not include irrelevant lines in the code snippet.\n"
-   "- Maintain the SAME indentation in the returned code as in the source code\n"
-
-   "4. Crucial guidelines for line numbers:\n"
-   "- The content regarding line numbers MUST strictly follow the format Replace lines: {{start_line}}-{{end_line}}. Do not be lazy!\n"
-   "- The range {{start_line}}-{{end_line}} is INCLUSIVE. Both start_line and end_line are included in the replacement.\n"
-   "- Count EVERY line, including empty lines and comments lines, comments. Do not be lazy!\n"
-   "- For single-line changes, use the same number for start and end lines.\n"
-   "- For multi-line changes, ensure the range covers ALL affected lines, from the very first to the very last.\n"
-   "- Double-check that your line numbers align perfectly with the original code structure.\n"
-
-   "5. Final check:\n"
-   "- Review all suggestions, ensuring each line number is correct, especially the start_line and end_line.\n"
-   "- Confirm that no unrelated code is accidentally modified or deleted.\n"
-   "- Verify that the start_line and end_line correctly include all intended lines for replacement.\n"
-   "- Perform a final alignment check to ensure your line numbers haven't shifted, especially the start_line.\n"
-   "- Double-check that your line numbers align perfectly with the original code structure.\n"
-   "- Do not show the full content after these modifications.\n"
-
-   "Remember: Accurate line numbers are CRITICAL. The range start_line to end_line must include ALL lines to be replaced, from the very first to the very last. Double-check every range before finalizing your response, paying special attention to the start_line to ensure it hasn't shifted down. Ensure that your line numbers perfectly match the original code structure without any overall shift.\n"))
+"Your primary task is to suggest code modifications with precise line numbers:\n"
+"1. Count ALL lines starting from 1 (including empty lines and comments).\n"
+"2. Use this exact format:\n"
+"   Replace lines: {start_line}-{end_line}\n"
+"   ```{language}\n"
+"   {suggested_code}\n"
+"   ```\n"
+"   {brief explanation}\n"
+"3. Important rules:\n"
+"   - Line ranges are INCLUSIVE\n"
+"   - Make ONLY the requested changes\n"
+"   - Maintain original indentation and comments\n"
+"   - Include COMPLETE code for the specified range\n"
+"   - Use the same language as the question\n"
+"4. Verify before submitting:\n"
+"   - Line numbers are accurate\n"
+"   - All affected lines are included\n"
+"   - No unrelated code is modified\n"
+"DO NOT show the full content after modifications.\n"
+))
 
 (defun elysium-toggle-window ()
   "Toggle the elysium chat window."
@@ -143,73 +138,65 @@ Must be a number between 0 and 1, exclusive."
       (other-window 1)
       (set-window-buffer (selected-window) elysium--chat-buffer))))
 
+
 ;;;###autoload
 (defun elysium-query (user-query)
-  "Send USER-QUERY to elysium from the current buffer or chat buffer."
-  (interactive
-   (list
-    (if (eq (current-buffer) elysium--chat-buffer)
-        nil ; We'll extract the query from the chat buffer
-      (read-string "User Query: "))))
+  "Send USER-QUERY to elysium from the current buffer."
+  (interactive (list (read-string "User Query: ")))
   (unless (buffer-live-p elysium--chat-buffer)
-    (elysium-setup-windows))
-  (let* ((in-chat-buffer (eq (current-buffer) elysium--chat-buffer))
-         (code-buffer (if in-chat-buffer
-                          (window-buffer (next-window))
-                        (current-buffer)))
+    (setq elysium--chat-buffer (gptel "*elysium*")))
+
+  (let* ((code-buffer (current-buffer))
          (chat-buffer elysium--chat-buffer)
-         (extracted-query
-          (when in-chat-buffer
-            (elysium-parse-user-query chat-buffer)))
-         (final-user-query (or user-query extracted-query
-                               (user-error "No query provided")))
-         (start-pos (with-current-buffer code-buffer
-                      (if (use-region-p)
-                          (save-excursion
-                            (goto-char (region-beginning))
-                            ;; Always record from the beginning of the line
-                            (beginning-of-line)
-                            (point))
-                        (point-min))))
-         (end-pos (with-current-buffer code-buffer
-                    (if (use-region-p)
-                        (let ((start-of-line-p
-                               (let ((current-point (region-end)))
-                                 (save-excursion
-                                   (goto-char (region-end))
-                                   (beginning-of-line)
-                                   (equal current-point (line-beginning-position))))))
-                          ;; Always record to the end of the line
-                          (save-excursion
-                            (goto-char (region-end))
-                            (when start-of-line-p (forward-line -1))
-                            (end-of-line)
-                            (point)))
-                      (point-max))))
-         (start-line (with-current-buffer code-buffer
-                       (line-number-at-pos start-pos)))
-         (end-line (with-current-buffer code-buffer
-                     (line-number-at-pos end-pos)))
-         (selected-code (with-current-buffer code-buffer
-                          (buffer-substring-no-properties start-pos end-pos)))
-         (file-type (with-current-buffer code-buffer
-                      (symbol-name major-mode)))
-         (full-query (format "\n\nFile type: %s\nLine range: %d-%d\n\nCode:\n%s\n\n%s"
+         (using-region (use-region-p))
+         (start-pos (if using-region
+                        (region-beginning)
+                      (point-min)))
+         (end-pos (if using-region
+                      (region-end)
+                    (point-max)))
+         ;; Get exact line positions
+         (start-line-pos (save-excursion
+                           (goto-char start-pos)
+                           (line-beginning-position)))
+         (end-line-pos (save-excursion
+                         (goto-char end-pos)
+                         (if (and (> end-pos start-pos)
+                                  (= (line-beginning-position) end-pos))
+                             ;; If at beginning of line, use previous line's end
+                             (progn (backward-char 1)
+                                    (line-end-position))
+                           (line-end-position))))
+         (start-line (line-number-at-pos start-line-pos))
+         (end-line (line-number-at-pos end-line-pos))
+         (selected-code (buffer-substring-no-properties start-line-pos end-line-pos))
+         (file-type (symbol-name major-mode))
+         ;; Include indentation info in the query
+         (full-query (format "\n\nFile type: %s\nLine range: %d-%d\n%s\n\nCode:\n```\n%s\n```\n\n%s"
                              file-type
                              start-line
                              end-line
+                             ""
                              selected-code
-                             final-user-query)))
+                             user-query)))
+
+    (setq elysium--last-query user-query)
+    (setq elysium--last-code-buffer code-buffer)
+
+    ;; Store region info for later use
+    (setq-local elysium--using-region using-region)
+    (setq-local elysium--region-start-line start-line)
+    (setq-local elysium--region-end-line end-line)
 
     (gptel--update-status " Waiting..." 'warning)
-    (message "Querying %s..." (gptel-backend-name gptel-backend))
+    (message "Querying %s for lines %d-%d..."
+             (gptel-backend-name gptel-backend)
+             start-line end-line)
     (deactivate-mark)
-    (save-excursion
-      (with-current-buffer chat-buffer
-        (goto-char (point-max))
-        (unless in-chat-buffer
-          (insert final-user-query))
-        (insert "\n\n")))
+    (with-current-buffer chat-buffer
+      (goto-char (point-max))
+      (insert user-query)
+      (insert "\n\n"))
 
     (gptel-request full-query
       :system elysium-base-prompt
@@ -221,23 +208,72 @@ Must be a number between 0 and 1, exclusive."
 The changes will be applied to CODE-BUFFER in a git merge format.
 INFO is passed into this function from the `gptel-request' function."
   (when response
+    ;; Log the full response if debug mode is enabled
+    (elysium-debug-log "LLM Response:\n%s" response)
+
     (let* ((extracted-data (elysium-extract-changes response))
            (changes (plist-get extracted-data :changes))
-           (explanations (plist-get extracted-data :explanations)))
+           (using-region (buffer-local-value 'elysium--using-region code-buffer)))
+
+      ;; Log the extracted changes if debug mode is enabled
+      (when elysium-debug-mode
+        (elysium-debug-log "Extracted %d change(s)" (length changes))
+        (dolist (change changes)
+          (elysium-debug-log "Change - Lines %d-%d:\n%s"
+                             (plist-get change :start)
+                             (plist-get change :end)
+                             (plist-get change :code))))
 
       (when changes
-        (elysium-apply-code-changes code-buffer changes))
+        ;; Apply changes
+        (with-current-buffer code-buffer
+          ;; Adjust changes if we're working with a region
+          (when using-region
+            (setq changes (elysium--adjust-changes-for-region changes))
+            (when elysium-debug-mode
+              (elysium-debug-log "Region-adjusted changes")))
 
-      ;; Insert explanations into chat buffer
+          (elysium-apply-code-changes code-buffer changes)
+
+          ;; Activate smerge mode and show transient menu
+          (smerge-mode 1)
+          (goto-char (point-min))
+          (ignore-errors (smerge-next))
+          (elysium-transient-menu)))
+
+      ;; Update status
       (with-current-buffer elysium--chat-buffer
-        (dolist (explanation explanations)
-          (let ((explanation-info (list :buffer (plist-get info :buffer)
-                                        :position (point-max-marker)
-                                        :in-place t)))
-            (gptel--insert-response (string-trim explanation) explanation-info)))
-
         (gptel--sanitize-model)
         (gptel--update-status " Ready" 'success)))))
+
+
+(defun elysium-debug-log (message &rest args)
+  "Log MESSAGE with ARGS to the debug buffer if debug mode is enabled."
+  (when elysium-debug-mode
+    (let ((debug-buffer (get-buffer-create elysium-debug-buffer-name)))
+      (with-current-buffer debug-buffer
+        (goto-char (point-max))
+        (let ((start (point)))
+          (insert (format "[%s] " (format-time-string "%Y-%m-%d %H:%M:%S")))
+          (insert (apply #'format message args))
+          (insert "\n\n")
+          ;; Add some properties to make it easier to read
+          (add-text-properties start (point) '(face font-lock-comment-face)))))))
+
+(defun elysium--adjust-changes-for-region (changes)
+  "Adjust CHANGES line numbers based on the selected region.
+Makes sure changes are properly aligned with the actual lines in the buffer."
+  (when (and (boundp 'elysium--region-start-line)
+             (local-variable-p 'elysium--region-start-line)
+             elysium--region-start-line)
+    ;; We need to offset all line numbers by the start line of the region
+    (let ((offset (1- elysium--region-start-line)))
+      (mapcar (lambda (change)
+                (list :start (+ (plist-get change :start) offset)
+                      :end (+ (plist-get change :end) offset)
+                      :code (plist-get change :code)))
+              changes)))
+  changes)
 
 (defun elysium-extract-changes (response)
   "Extract the code-changes and explanations from RESPONSE.
@@ -291,12 +327,9 @@ Explanations will be of the format:
 
 (defun elysium-apply-code-changes (buffer code-changes)
   "Apply CODE-CHANGES to BUFFER in a git merge format.
-We need to keep track of an offset of line numbers.  Because the AI gives us
-line numbers based on the current buffer, all inserted code-changes will offset
-those line numbers.  So if we insert a sequence of lines in addition to the
->>>>>>>, =======, <<<<<<< strings for a change, then the offset of the
-subsequent inserted lines will need to be offset by
-3 (number of merge strings) + the length of the newlines"
+Uses simple conflict markers to highlight the differences between
+original and suggested code. Breaks down large changes into smaller chunks
+for easier review."
   (with-current-buffer buffer
     (save-excursion
       (let ((offset 0))
@@ -304,65 +337,239 @@ subsequent inserted lines will need to be offset by
           (let* ((start (plist-get change :start))
                  (end (plist-get change :end))
                  (new-code (string-trim-right (plist-get change :code)))
-                 (new-lines (split-string new-code "\n" t)))
-            (goto-char (point-min))
-            (forward-line (1- (+ start offset)))
-            (insert "<<<<<<< HEAD\n")
+                 (orig-code-start (progn
+                                    (goto-char (point-min))
+                                    (forward-line (1- (+ start offset)))
+                                    (point)))
+                 (orig-code-end (progn
+                                  (goto-char (point-min))
+                                  (forward-line (1- (+ end offset 1)))
+                                  (point)))
+                 (orig-code (buffer-substring-no-properties orig-code-start orig-code-end)))
 
-            ;; Skip forward over the previous code
-            (forward-line (+ 1 (- end start)))
-            (insert (format "=======\n%s\n>>>>>>> %s\n"
-                            new-code
-                            (gptel-backend-name gptel-backend)))
-            (setq offset (+ offset 3 (length new-lines)))))))
+            ;; If the change is multi-line, try to refine the diff
+            (if (and (> (length (split-string orig-code "\n" t)) 1)
+                     (> (length (split-string new-code "\n" t)) 1))
+                (elysium--apply-refined-change orig-code-start orig-code-end orig-code new-code)
+              ;; For single-line changes or very small changes, use the simple approach
+              (elysium--apply-simple-change orig-code-start orig-code-end orig-code new-code))
+
+            ;; Update offset - We need to recalculate the total lines now
+            (let* ((new-line-count (count-lines orig-code-start (point)))
+                   (original-line-count (- end start -1)) ; -1 because line range is inclusive
+                   (line-diff (- new-line-count original-line-count)))
+              (setq offset (+ offset line-diff)))))))
     (run-hooks 'elysium-apply-changes-hook)))
 
-;; TODO this could probably be replaced with something already in gptel
-(defun elysium-parse-user-query (buffer)
-  "Parse and extract the most recent user query from BUFFER.
-The query is expected to be after the last '* ' (org-mode) or
- '### ' (markdown-mode) heading.  Returns nil if no query is found."
-  (with-current-buffer buffer
-    (save-excursion
-      (goto-char (point-max))
-      (let ((case-fold-search t)
-            (heading-regex (if (derived-mode-p 'org-mode)
-                               "^\\*\\*\\* "
-                             "^### ")))
-        (when (re-search-backward heading-regex nil t)
-          (let ((query-text (buffer-substring-no-properties (point) (point-max))))
-            (string-trim query-text)))))))
+(defun elysium--apply-simple-change (start end orig-code new-code)
+  "Apply a simple change with conflict markers.
+Replace the region from START to END containing ORIG-CODE with conflict markers
+containing both ORIG-CODE and NEW-CODE."
+  (delete-region start end)
+  (goto-char start)
+  (insert (concat "<<<<<<< HEAD\n"
+                 orig-code
+                 "=======\n"
+                 new-code
+                 "\n>>>>>>> " (gptel-backend-name gptel-backend) "\n")))
+
+(defun elysium--apply-refined-change (start end orig-code new-code)
+  "Apply a refined change that breaks code into smaller conflict chunks.
+Replace the region from START to END containing ORIG-CODE with a refined diff
+against NEW-CODE, using conflict markers for each meaningful chunk."
+  (delete-region start end)
+  (goto-char start)
+
+  ;; Split both code blocks into lines
+  (let* ((orig-lines (split-string orig-code "\n" t))
+         (new-lines (split-string new-code "\n" t))
+         (chunks (elysium--create-diff-chunks orig-lines new-lines))
+         (insertion-point start))
+
+    ;; Insert each chunk with appropriate conflict markers
+    (dolist (chunk chunks)
+      (let ((chunk-type (car chunk))
+            (orig-chunk-lines (nth 1 chunk))
+            (new-chunk-lines (nth 2 chunk)))
+
+        (cond
+         ;; Lines that are the same in both versions - no conflict needed
+         ((eq chunk-type 'same)
+          (let ((text (string-join orig-chunk-lines "\n")))
+            (insert text)
+            (when (> (length text) 0)
+              (insert "\n"))))
+
+         ;; Lines that differ - add conflict markers
+         ((eq chunk-type 'diff)
+          (let ((orig-text (string-join (reverse orig-chunk-lines) "\n"))
+                (new-text (string-join (reverse new-chunk-lines) "\n")))
+            (insert "<<<<<<< HEAD\n")
+            (when (> (length orig-text) 0)
+              (insert orig-text "\n"))
+            (insert "=======\n")
+            (when (> (length new-text) 0)
+              (insert new-text "\n"))
+            (insert ">>>>>>> " (gptel-backend-name gptel-backend) "\n"))))))))
+
+(defun elysium--create-diff-chunks (orig-lines new-lines)
+  "Create a list of diff chunks between ORIG-LINES and NEW-LINES.
+Each chunk is of the form (TYPE ORIG-CHUNK NEW-CHUNK) where:
+- TYPE is either 'same or 'diff
+- ORIG-CHUNK is a list of lines from the original text
+- NEW-CHUNK is a list of lines from the new text
+
+For 'same chunks, ORIG-CHUNK and NEW-CHUNK contain the same lines."
+  (let ((chunks nil)
+        (i 0)
+        (j 0)
+        (orig-len (length orig-lines))
+        (new-len (length new-lines))
+        (current-chunk-type nil)
+        (current-orig-chunk nil)
+        (current-new-chunk nil)
+        (context-lines 1)) ; Number of context lines to keep before/after changes
+
+    ;; Compare lines and build chunks
+    (while (or (< i orig-len) (< j new-len))
+      (let ((orig-line (when (< i orig-len) (nth i orig-lines)))
+            (new-line (when (< j new-len) (nth j new-lines)))
+            (lines-match (and (< i orig-len)
+                              (< j new-len)
+                              (string= (nth i orig-lines) (nth j new-lines)))))
+
+        (if lines-match
+            ;; Lines match - they're part of a 'same' chunk
+            (progn
+              ;; If we were in a 'diff' chunk, finalize it
+              (when (eq current-chunk-type 'diff)
+                (push (list 'diff current-orig-chunk current-new-chunk) chunks)
+                (setq current-orig-chunk nil
+                      current-new-chunk nil))
+
+              ;; Add to or start a 'same' chunk
+              (if (eq current-chunk-type 'same)
+                  (progn
+                    (push orig-line current-orig-chunk)
+                    (push new-line current-new-chunk))
+                (setq current-chunk-type 'same
+                      current-orig-chunk (list orig-line)
+                      current-new-chunk (list new-line)))
+
+              ;; Move to next lines
+              (cl-incf i)
+              (cl-incf j))
+
+          ;; Lines don't match - they're part of a 'diff' chunk
+          (progn
+            ;; If we were in a 'same' chunk, finalize it
+            (when (eq current-chunk-type 'same)
+              ;; Reverse the lists to restore order
+              (push (list 'same (reverse current-orig-chunk) (reverse current-new-chunk)) chunks)
+              (setq current-orig-chunk nil
+                    current-new-chunk nil))
+
+            ;; Add to or start a 'diff' chunk
+            (setq current-chunk-type 'diff)
+
+            ;; The heuristic below finds the 'best' way to advance through the diff
+            ;; Look ahead to find matching lines
+            (let ((match-distance-i nil)
+                  (match-distance-j nil))
+
+              ;; Look ahead in orig-lines to find a match with current new-line
+              (when (and new-line (< i orig-len))
+                (let ((k 0))
+                  (while (and (< (+ i k) orig-len)
+                              (< k 10) ; Limit how far we look ahead
+                              (not match-distance-i))
+                    (when (string= (nth (+ i k) orig-lines) new-line)
+                      (setq match-distance-i k))
+                    (cl-incf k))))
+
+              ;; Look ahead in new-lines to find a match with current orig-line
+              (when (and orig-line (< j new-len))
+                (let ((k 0))
+                  (while (and (< (+ j k) new-len)
+                              (< k 10) ; Limit how far we look ahead
+                              (not match-distance-j))
+                    (when (string= (nth (+ j k) new-lines) orig-line)
+                      (setq match-distance-j k))
+                    (cl-incf k))))
+
+              ;; Decide which way to advance based on match distances
+              (cond
+               ;; If we're at the end of either list, consume the other
+               ((>= i orig-len)
+                (when new-line
+                  (push new-line current-new-chunk)
+                  (cl-incf j)))
+               ((>= j new-len)
+                (when orig-line
+                  (push orig-line current-orig-chunk)
+                  (cl-incf i)))
+
+               ;; If we found a match in both directions, take the shortest path
+               ((and match-distance-i match-distance-j)
+                (if (< match-distance-i match-distance-j)
+                    (progn
+                      (push orig-line current-orig-chunk)
+                      (cl-incf i))
+                  (push new-line current-new-chunk)
+                  (cl-incf j)))
+
+               ;; If we found a match in just one direction, go that way
+               (match-distance-i
+                (push orig-line current-orig-chunk)
+                (cl-incf i))
+               (match-distance-j
+                (push new-line current-new-chunk)
+                (cl-incf j))
+
+               ;; No match found, just advance both
+               (t
+                (push orig-line current-orig-chunk)
+                (push new-line current-new-chunk)
+                (cl-incf i)
+                (cl-incf j)))))))
+
+      ;; End of main loop
+      )
+
+    ;; Finalize the last chunk
+    (when current-chunk-type
+      (if (eq current-chunk-type 'same)
+          (push (list 'same (reverse current-orig-chunk) (reverse current-new-chunk)) chunks)
+        (push (list 'diff (reverse current-orig-chunk) (reverse current-new-chunk)) chunks)))
+
+    ;; Return the chunks in correct order
+    (reverse chunks)))
 
 (defun elysium-clear-buffer ()
-  "Switch to the elysium buffer and clear it."
+  "Clear the elysium buffer."
   (interactive)
-  (unless (eq (current-buffer) (get-buffer elysium--chat-buffer))
-    (elysium-setup-windows))
   (with-current-buffer elysium--chat-buffer
     (erase-buffer)
     (insert (gptel-prompt-prefix-string))))
 
-(defun elysium-add-context ()
-  "Add the selected region as context to the elysium chat buffer."
-  (interactive)
-  (let ((content (if (region-active-p)
-                     (buffer-substring-no-properties (region-beginning) (region-end))
-                   (buffer-substring-no-properties (point-min) (point-max))))
-        (code-buffer-language
+(defun elysium-add-context (content)
+  "Add CONTENT as context to the elysium chat buffer."
+  (interactive
+   (list (if (region-active-p)
+             (buffer-substring-no-properties (region-beginning) (region-end))
+           (buffer-substring-no-properties (point-min) (point-max)))))
+  ;; Ensure chat buffer exists
+  (unless (buffer-live-p elysium--chat-buffer)
+    (setq elysium--chat-buffer (gptel "*elysium*")))
+
+  (let ((code-buffer-language
          (string-trim-right
           (string-trim-right (symbol-name major-mode) "-ts-mode$") "-mode$")))
-    (elysium-setup-windows)
     (with-current-buffer elysium--chat-buffer
       (goto-char (point-max))
       (insert "\n")
-      (let ((src-pattern
-             (cond
-              ((derived-mode-p 'markdown-mode)
-               "```%s\n%s\n```")
-              ((derived-mode-p 'org-mode)
-               "#+begin_src %s\n%s\n#+end_src")
-              (t "%s%s"))))
-        (insert (format src-pattern code-buffer-language content))))))
+      (insert (format "```%s\n%s\n```" code-buffer-language content))
+      (insert "\n"))))
 
 (defun elysium-keep-all-suggested-changes ()
   "Keep all of the LLM suggestions."
@@ -371,7 +578,9 @@ The query is expected to be after the last '* ' (org-mode) or
     (goto-char (point-min))
     (ignore-errors (funcall #'smerge-keep-lower))
     (while (ignore-errors (not (smerge-next)))
-      (funcall #'smerge-keep-lower))))
+      (funcall #'smerge-keep-lower))
+    (smerge-mode -1)
+    (message "All suggested changes applied")))
 
 (defun elysium-discard-all-suggested-changes ()
   "Discard all of the LLM suggestions."
@@ -380,7 +589,80 @@ The query is expected to be after the last '* ' (org-mode) or
     (goto-char (point-min))
     (ignore-errors (funcall #'smerge-keep-upper))
     (while (ignore-errors (not (smerge-next)))
-      (funcall #'smerge-keep-upper))))
+      (funcall #'smerge-keep-upper))
+    (smerge-mode -1)
+    (message "All suggested changes discarded")))
+
+(defun elysium-navigate-next-change ()
+  "Navigate to the next change suggestion and keep the transient menu active."
+  (interactive)
+  (if (ignore-errors (smerge-next))
+      (message "Navigated to next change")
+    (message "No more changes"))
+  ;; Keep the transient menu active
+  (elysium-transient-menu))
+
+(defun elysium-navigate-prev-change ()
+  "Navigate to the previous change suggestion and keep the transient menu active."
+  (interactive)
+  (if (ignore-errors (smerge-prev))
+      (message "Navigated to previous change")
+    (message "No more changes"))
+  ;; Keep the transient menu active
+  (elysium-transient-menu))
+
+(defun elysium-keep-current-change ()
+  "Keep the current suggested change and move to the next one."
+  (interactive)
+  (smerge-keep-lower)
+  (if (ignore-errors (not (smerge-next)))
+      (progn
+        (message "All changes reviewed - no more conflicts")
+        (smerge-mode -1))
+    (message "Applied change - move to next")
+    ;; Keep the transient menu active if there are more changes
+    (elysium-transient-menu)))
+
+(defun elysium-reject-current-change ()
+  "Reject the current suggested change and move to the next one."
+  (interactive)
+  (smerge-keep-upper)
+  (if (ignore-errors (not (smerge-next)))
+      (progn
+        (message "All changes reviewed - no more conflicts")
+        (smerge-mode -1))
+    (message "Rejected change - move to next")
+    ;; Keep the transient menu active if there are more changes
+    (elysium-transient-menu)))
+
+(defun elysium-retry-query ()
+  "Retry the last query with modifications, preserving the previously marked region."
+  (interactive)
+  (let ((new-query (read-string "Modify query: " elysium--last-query)))
+    (when new-query
+      (with-current-buffer elysium--last-code-buffer
+        ;; Discard current suggestions
+        (elysium-discard-all-suggested-changes)
+
+        ;; Restore the region if a region was previously used
+        (when (buffer-local-value 'elysium--using-region elysium--last-code-buffer)
+          (let* ((point-min (point-min))
+                 (start-line (buffer-local-value 'elysium--region-start-line elysium--last-code-buffer))
+                 (end-line (buffer-local-value 'elysium--region-end-line elysium--last-code-buffer))
+                 start-pos end-pos)
+            ;; Set point to start line
+            (setq start-pos (goto-char point-min))
+            (forward-line (1- start-line))
+            (setq start-pos (point))
+            ;; Set mark to end line
+            (goto-char point-min)
+            (forward-line (1- end-line))
+            (end-of-line)
+            (setq end-pos (point))
+            (set-mark start-pos)))
+
+        ;; Execute the new query
+        (elysium-query new-query)))))
 
 (defun elysium--ordinal (n)
   "Convert integer N to its ordinal string representation."
@@ -389,6 +671,70 @@ The query is expected to be after the last '* ' (org-mode) or
         (concat (number-to-string n) "th")
       (concat (number-to-string n)
               (nth (mod n 10) suffixes)))))
+
+;; Add command to toggle debug mode
+(defun elysium-toggle-debug-mode ()
+  "Toggle elysium debug mode."
+  (interactive)
+  (setq elysium-debug-mode (not elysium-debug-mode))
+  (message "Elysium debug mode %s" (if elysium-debug-mode "enabled" "disabled"))
+  (when elysium-debug-mode
+    (display-buffer (get-buffer-create elysium-debug-buffer-name))))
+
+;; Add command to clear debug buffer
+(defun elysium-clear-debug-buffer ()
+  "Clear the elysium debug buffer."
+  (interactive)
+  (when-let ((buffer (get-buffer elysium-debug-buffer-name)))
+    (with-current-buffer buffer
+      (erase-buffer)
+      (insert (format "[%s] Debug buffer cleared\n\n"
+                       (format-time-string "%Y-%m-%d %H:%M:%S"))))))
+
+
+;; Define a transient menu for Elysium with compact layout
+(transient-define-prefix elysium-transient-menu ()
+  "Elysium actions menu."
+  ["Actions"
+   :class transient-row
+   ("n" "Next" elysium-navigate-next-change)
+   ("p" "Prev" elysium-navigate-prev-change)
+   ("a" "Accept" elysium-keep-current-change)
+   ("d" "Reject" elysium-reject-current-change)
+   ("RET" "Accept all" elysium-keep-all-suggested-changes)
+   ("x" "Discard all" elysium-discard-all-suggested-changes)
+   ("r" "Retry" elysium-retry-query)
+   ("q" "Quit" transient-quit-one)])
+
+
+;; Add key binding for C-<return> (Ctrl+Enter) to trigger elysium-query in prog-mode
+(defun elysium-query-dwim ()
+  "Query elysium with the region if active, otherwise prompt for a query."
+  (interactive)
+  (if (use-region-p)
+      (call-interactively 'elysium-query)
+    (let ((current-prefix-arg '(4))) ; Simulate C-u prefix to prompt for region
+      (call-interactively 'elysium-query))))
+
+;; Define a keymap for programming modes
+(defvar elysium-prog-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "C-<return>") 'elysium-query-dwim)
+    (define-key map (kbd "C-c e t") 'elysium-toggle-window)
+    (define-key map (kbd "C-c e a") 'elysium-add-context)
+    (define-key map (kbd "C-c e c") 'elysium-clear-buffer)
+    (define-key map (kbd "C-c e d") 'elysium-toggle-debug-mode)
+    (define-key map (kbd "C-c e l") 'elysium-debug-log)
+    (define-key map (kbd "C-c e l") 'elysium-transient-menu)
+    map)
+  "Keymap for elysium in programming modes.")
+
+;; Set up a minor mode to attach the keymap
+(define-minor-mode elysium-prog-mode
+  "Minor mode for elysium in programming modes."
+  :lighter " Elysium"
+  :keymap elysium-prog-mode-map)
+
 
 (provide 'elysium)
 
