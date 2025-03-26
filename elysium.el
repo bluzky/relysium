@@ -864,26 +864,22 @@ For 'same chunks, ORIG-CHUNK and NEW-CHUNK contain the same lines."
     (let ((current-prefix-arg '(4))) ; Simulate C-u prefix to prompt for region
       (call-interactively 'elysium-query))))
 
-;; Define a keymap for programming modes
-(defvar elysium-prog-mode-map
-  (let ((map (make-sparse-keymap)))
-    (define-key map (kbd "C-<return>") 'elysium-query-dwim)
-    (define-key map (kbd "C-c a") 'elysium-ask)
-    (define-key map (kbd "C-c e t") 'elysium-toggle-window)
-    (define-key map (kbd "C-c e a") 'elysium-add-context)
-    (define-key map (kbd "C-c e c") 'elysium-ask)
-    (define-key map (kbd "C-c e d") 'elysium-clear-buffer)
-    (define-key map (kbd "C-c e L") 'elysium-toggle-debug-mode)
-    (define-key map (kbd "C-c e l") 'elysium-debug-log)
-    (define-key map (kbd "C-c e m") 'elysium-transient-menu)
-    map)
-  "Keymap for elysium in programming modes.")
-
-;; Set up a minor mode to attach the keymap
+;;;###autoload
 (define-minor-mode elysium-prog-mode
-  "Minor mode for elysium in programming modes."
+  "Minor mode for elysium in programming modes.
+Provides keybindings and integration for elysium code assistance."
   :lighter " Elysium"
-  :keymap elysium-prog-mode-map)
+  :keymap (let ((map (make-sparse-keymap)))
+            (define-key map (kbd "C-<return>") 'elysium-query-dwim)
+            (define-key map (kbd "C-c a") 'elysium-ask)
+            (define-key map (kbd "C-c e t") 'elysium-toggle-window)
+            (define-key map (kbd "C-c e a") 'elysium-add-context)
+            (define-key map (kbd "C-c e c") 'elysium-ask)
+            (define-key map (kbd "C-c e d") 'elysium-clear-buffer)
+            (define-key map (kbd "C-c e L") 'elysium-toggle-debug-mode)
+            (define-key map (kbd "C-c e l") 'elysium-debug-log)
+            (define-key map (kbd "C-c e m") 'elysium-transient-menu)
+            map))
 
 
 (provide 'elysium)
