@@ -1,4 +1,4 @@
-;;; elysium.el --- Automatically apply LLM-created code-suggestions -*- lexical-binding: t; -*-
+;;; relysium.el --- Automatically apply LLM-created code-suggestions -*- lexical-binding: t; -*-
 
 ;; No Copyright for my changes :v
 
@@ -39,12 +39,12 @@
   "Apply code changes using gptel."
   :group 'hypermedia)
 
-(defcustom elysium-apply-changes-hook nil
+(defcustom relysium-apply-changes-hook nil
   "Hook run after code changes have been applied on a buffer."
   :group 'elysium
   :type 'hook)
 
-(defcustom elysium-window-size 0.33
+(defcustom relysium-window-size 0.33
   "Size of the elysium chat window as a fraction of the frame.
 Must be a number between 0 and 1, exclusive."
   :type 'float
@@ -53,42 +53,42 @@ Must be a number between 0 and 1, exclusive."
          (if (and (numberp value)
                   (< 0 value 1))
              (set-default symbol value)
-           (user-error "Elysium-window-size must be a number between 0 and 1, exclusive"))))
+           (user-error "RRelysium-window-size must be a number between 0 and 1, exclusive"))))
 
-(defcustom elysium-window-style 'vertical
+(defcustom relysium-window-style 'vertical
   "Specify the orientation.  It can be \='horizontal, '\=vertical, or nil."
   :type '(choice (const :tag "Horizontal" horizontal)
                  (const :tag "Vertical" vertical)
                  (const :tag "None" nil)))
 
 
-(defvar elysium--chat-buffer nil
+(defvar relysium--chat-buffer nil
   "Buffer used for LLM interaction.")
 
-(defvar elysium--last-query nil
+(defvar relysium--last-query nil
   "The last query sent to the LLM.")
 
-(defvar elysium--last-code-buffer nil
+(defvar relysium--last-code-buffer nil
   "The buffer that was last modified by Elysium.")
 
-(defcustom elysium-debug-mode nil
+(defcustom relysium-debug-mode nil
   "When non-nil, log LLM responses and other debug information."
   :group 'elysium
   :type 'boolean)
 
-(defcustom elysium-debug-buffer-name "*elysium-debug*"
+(defcustom relysium-debug-buffer-name "*relysium-debug*"
   "Name of the buffer for debug logging."
   :group 'elysium
   :type 'string)
 
-(defvar elysium-ask-prompt
+(defvar relysium-ask-prompt
   "You are an expert programmer and coding assistant.
 Your task is to provide helpful, accurate, and relevant information about the code provided.
 Be concise yet thorough in your explanations.
 Your answers should be clear, informative, and directly related to the code provided.
 Your answer should be short and focus ONLY on the questions asked.")
 
-(defvar elysium-edit-prompt "Your task is to create exact code modifications with explicit line number ranges.
+(defvar relysium-edit-prompt "Your task is to create exact code modifications with explicit line number ranges.
 Act as an expert software developer.
 Always use best practices when coding.
 Respect and use existing conventions, libraries, etc that are already present in the code base.
@@ -155,49 +155,49 @@ def add(a, b):
 </code>
 ")
 
-(defun elysium-toggle-window ()
+(defun relysium-toggle-window ()
   "Toggle the elysium chat window."
   (interactive)
-  (if (and (buffer-live-p elysium--chat-buffer)
-           (get-buffer-window elysium--chat-buffer))
-      (delete-window (get-buffer-window elysium--chat-buffer))
+  (if (and (buffer-live-p relysium--chat-buffer)
+           (get-buffer-window relysium--chat-buffer))
+      (delete-window (get-buffer-window relysium--chat-buffer))
 
-    (elysium-setup-windows)))
+    (relysium-setup-windows)))
 
-(defun elysium-setup-windows ()
+(defun relysium-setup-windows ()
   "Set up the coding assistant layout with the chat window."
-  (unless (buffer-live-p elysium--chat-buffer)
-    (setq elysium--chat-buffer
+  (unless (buffer-live-p relysium--chat-buffer)
+    (setq relysium--chat-buffer
           (gptel "*elysium*")))
 
-  (when elysium-window-style
+  (when relysium-window-style
     (delete-other-windows)
 
     (let* ((main-buffer (current-buffer))
            (main-window (selected-window))
-           (split-size (floor (* (if (eq elysium-window-style 'vertical)
+           (split-size (floor (* (if (eq relysium-window-style 'vertical)
                                      (frame-width)
                                    (frame-height))
-                                 (- 1 elysium-window-size)))))
-      (with-current-buffer elysium--chat-buffer)
-      (if (eq elysium-window-style 'vertical)
+                                 (- 1 relysium-window-size)))))
+      (with-current-buffer relysium--chat-buffer)
+      (if (eq relysium-window-style 'vertical)
           (split-window-right split-size)
         (split-window-below split-size))
       (set-window-buffer main-window main-buffer)
       (other-window 1)
-      (set-window-buffer (selected-window) elysium--chat-buffer))))
+      (set-window-buffer (selected-window) relysium--chat-buffer))))
 
 ;;;###autoload
-(defun elysium-ask (user-prompt)
+(defun relysium-ask (user-prompt)
   "Ask a question about the selected code region"
   (interactive "sAsk about code: ")
   (if (not (use-region-p))
       (message "Please select a region of code first")
     ;; Region is selected, proceed with LLM query
-    (unless (buffer-live-p elysium--chat-buffer)
-      (setq elysium--chat-buffer (gptel "*elysium*")))
+    (unless (buffer-live-p relysium--chat-buffer)
+      (setq relysium--chat-buffer (gptel "*elysium*")))
 
-    (let* ((chat-buffer elysium--chat-buffer)
+    (let* ((chat-buffer relysium--chat-buffer)
            (selected-code (buffer-substring-no-properties (region-beginning) (region-end)))
            (file-type (symbol-name major-mode))
            (lang-name (replace-regexp-in-string "-mode$\\|-ts-mode$" "" file-type))
@@ -216,7 +216,7 @@ def add(a, b):
         (insert "\n"))
 
       ;; Show the chat window
-      (elysium-setup-windows)
+      (relysium-setup-windows)
 
       ;; Update status and send request
       (gptel--update-status " Waiting..." 'warning)
@@ -224,15 +224,15 @@ def add(a, b):
       (deactivate-mark)
 
       (gptel-request full-prompt
-        :system elysium-ask-prompt
+        :system relysium-ask-prompt
         :buffer chat-buffer
-        :callback 'elysium-ask-callback))))
+        :callback 'relysium-ask-callback))))
 
-(defun elysium-ask-callback (response _info)
-  "Handle the RESPONSE from LLM for elysium-ask.
+(defun relysium-ask-callback (response _info)
+  "Handle the RESPONSE from LLM for relysium-ask.
 _INFO is unused but required by the gptel callback interface."
   (when response
-    (with-current-buffer elysium--chat-buffer
+    (with-current-buffer relysium--chat-buffer
       (goto-char (point-max))
       (insert "\n\n### ASSISTANT:\n")
       (insert response)
@@ -293,14 +293,14 @@ _INFO is unused but required by the gptel callback interface."
       (list trimmed-string adjusted-start-line adjusted-end-line))))
 
 ;;;###autoload
-(defun elysium-query (user-query)
+(defun relysium-query (user-query)
   "Send USER-QUERY to elysium from the current buffer."
   (interactive (list (read-string "User Query: ")))
-  (unless (buffer-live-p elysium--chat-buffer)
-    (setq elysium--chat-buffer (gptel "*elysium*")))
+  (unless (buffer-live-p relysium--chat-buffer)
+    (setq relysium--chat-buffer (gptel "*elysium*")))
 
   (let* ((code-buffer (current-buffer))
-         (chat-buffer elysium--chat-buffer)
+         (chat-buffer relysium--chat-buffer)
          (using-region (use-region-p))
          (start-pos (if using-region
                         (region-beginning)
@@ -341,13 +341,13 @@ _INFO is unused but required by the gptel callback interface."
                              final-code
                              user-query)))
 
-    (setq elysium--last-query user-query)
-    (setq elysium--last-code-buffer code-buffer)
+    (setq relysium--last-query user-query)
+    (setq relysium--last-code-buffer code-buffer)
 
     ;; Store region info for later use
-    (setq-local elysium--using-region using-region)
-    (setq-local elysium--region-start-line final-start-line)
-    (setq-local elysium--region-end-line final-end-line)
+    (setq-local relysium--using-region using-region)
+    (setq-local relysium--region-start-line final-start-line)
+    (setq-local relysium--region-end-line final-end-line)
 
     (with-current-buffer chat-buffer
       (goto-char (point-max))
@@ -366,32 +366,32 @@ _INFO is unused but required by the gptel callback interface."
       (insert "\n\n"))
 
     (gptel-request full-query
-      :system elysium-edit-prompt
+      :system relysium-edit-prompt
       :buffer chat-buffer
-      :callback (apply-partially #'elysium-handle-response code-buffer))))
+      :callback (apply-partially #'relysium-handle-response code-buffer))))
 
-(defun elysium-handle-response (code-buffer response info)
+(defun relysium-handle-response (code-buffer response info)
   "Handle the RESPONSE from gptel.
 The changes will be applied to CODE-BUFFER in a git merge format.
 INFO is passed into this function from the `gptel-request' function."
   (when response
     ;; Log the full response if debug mode is enabled
-    (elysium-debug-log "LLM Response:\n%s" response)
+    (relysium-debug-log "LLM Response:\n%s" response)
 
     ;; Add this section to show the full response in the chat buffer
-    (with-current-buffer elysium--chat-buffer
+    (with-current-buffer relysium--chat-buffer
       (goto-char (point-max))
       (insert "\n\n### ASSISTANT:\n")
       (insert response)
       (insert "\n\n### "))
 
-    (let* ((extracted-data (elysium-extract-changes response))
+    (let* ((extracted-data (relysium-extract-changes response))
            (changes (plist-get extracted-data :changes))
-           (using-region (buffer-local-value 'elysium--using-region code-buffer)))
+           (using-region (buffer-local-value 'relysium--using-region code-buffer)))
 
       ;; Log the extracted changes if debug mode is enabled
-      (when elysium-debug-mode
-        (elysium-debug-log "Extracted %d change(s)" (length changes)))
+      (when relysium-debug-mode
+        (relysium-debug-log "Extracted %d change(s)" (length changes)))
 
       ;; mark undo boundary
       (undo-boundary)
@@ -402,28 +402,28 @@ INFO is passed into this function from the `gptel-request' function."
         (with-current-buffer code-buffer
           ;; Adjust changes if we're working with a region
           (when using-region
-            (setq changes (elysium--adjust-changes-for-region changes))
-            (when elysium-debug-mode
-              (elysium-debug-log "Region-adjusted changes")))
+            (setq changes (relysium--adjust-changes-for-region changes))
+            (when relysium-debug-mode
+              (relysium-debug-log "Region-adjusted changes")))
 
-          (elysium-apply-code-changes code-buffer changes)
+          (relysium-apply-code-changes code-buffer changes)
 
           ;; Activate smerge mode and show transient menu
           (smerge-mode 1)
           (goto-char (point-min))
           (ignore-errors (smerge-next))
-          (elysium-transient-menu)))
+          (relysium-transient-menu)))
 
       ;; Update status
-      (with-current-buffer elysium--chat-buffer
+      (with-current-buffer relysium--chat-buffer
         (gptel--sanitize-model)
         (gptel--update-status " Ready" 'success)))))
 
 
-(defun elysium-debug-log (message &rest args)
+(defun relysium-debug-log (message &rest args)
   "Log MESSAGE with ARGS to the debug buffer if debug mode is enabled."
-  (when elysium-debug-mode
-    (let ((debug-buffer (get-buffer-create elysium-debug-buffer-name)))
+  (when relysium-debug-mode
+    (let ((debug-buffer (get-buffer-create relysium-debug-buffer-name)))
       (with-current-buffer debug-buffer
         (goto-char (point-max))
         (let ((start (point)))
@@ -433,14 +433,14 @@ INFO is passed into this function from the `gptel-request' function."
           ;; Add some properties to make it easier to read
           (add-text-properties start (point) '(face font-lock-comment-face)))))))
 
-(defun elysium--adjust-changes-for-region (changes)
+(defun relysium--adjust-changes-for-region (changes)
   "Adjust CHANGES line numbers based on the selected region.
 Makes sure changes are properly aligned with the actual lines in the buffer."
-  (when (and (boundp 'elysium--region-start-line)
-             (local-variable-p 'elysium--region-start-line)
-             elysium--region-start-line)
+  (when (and (boundp 'relysium--region-start-line)
+             (local-variable-p 'relysium--region-start-line)
+             relysium--region-start-line)
     ;; We need to offset all line numbers by the start line of the region
-    (let ((offset (1- elysium--region-start-line)))
+    (let ((offset (1- relysium--region-start-line)))
       (mapcar (lambda (change)
                 (list :start (+ (plist-get change :start) offset)
                       :end (+ (plist-get change :end) offset)
@@ -448,7 +448,7 @@ Makes sure changes are properly aligned with the actual lines in the buffer."
               changes)))
   changes)
 
-(defun elysium-extract-changes (response)
+(defun relysium-extract-changes (response)
   "Extract the code-changes from RESPONSE.
 Replace lines: 1-2
 <code>
@@ -476,7 +476,7 @@ Replace lines: 4-4
         (setq start (match-end 0))))
     (list :changes (nreverse changes))))
 
-(defun elysium-apply-code-changes (buffer code-changes)
+(defun relysium-apply-code-changes (buffer code-changes)
   "Apply CODE-CHANGES to BUFFER in a git merge format.
 Uses simple conflict markers to highlight the differences between
 original and suggested code. Breaks down large changes into smaller chunks
@@ -501,18 +501,18 @@ for easier review."
             ;; If the change is multi-line, try to refine the diff
             (if (and (> (length (split-string orig-code "\n")) 1)
                      (> (length (split-string new-code "\n")) 1))
-                (elysium--apply-refined-change orig-code-start orig-code-end orig-code new-code)
+                (relysium--apply-refined-change orig-code-start orig-code-end orig-code new-code)
               ;; For single-line changes or very small changes, use the simple approach
-              (elysium--apply-simple-change orig-code-start orig-code-end orig-code new-code))
+              (relysium--apply-simple-change orig-code-start orig-code-end orig-code new-code))
 
             ;; Update offset - We need to recalculate the total lines now
             (let* ((new-line-count (count-lines orig-code-start (point)))
                    (original-line-count (- end start -1)) ; -1 because line range is inclusive
                    (line-diff (- new-line-count original-line-count)))
               (setq offset (+ offset line-diff)))))))
-    (run-hooks 'elysium-apply-changes-hook)))
+    (run-hooks 'relysium-apply-changes-hook)))
 
-(defun elysium--apply-simple-change (start end orig-code new-code)
+(defun relysium--apply-simple-change (start end orig-code new-code)
   "Apply a simple change with conflict markers.
 Replace the region from START to END containing ORIG-CODE with conflict markers
 containing both ORIG-CODE and NEW-CODE."
@@ -524,7 +524,7 @@ containing both ORIG-CODE and NEW-CODE."
                   new-code
                   "\n>>>>>>> " (gptel-backend-name gptel-backend) "\n")))
 
-(defun elysium--apply-refined-change (start end orig-code new-code)
+(defun relysium--apply-refined-change (start end orig-code new-code)
   "Apply a refined change that breaks code into smaller conflict chunks.
 Replace the region from START to END containing ORIG-CODE with a refined diff
 against NEW-CODE, using conflict markers for each meaningful chunk."
@@ -534,7 +534,7 @@ against NEW-CODE, using conflict markers for each meaningful chunk."
   ;; Split both code blocks into lines
   (let* ((orig-lines (split-string orig-code "\n"))
          (new-lines (split-string new-code "\n"))
-         (chunks (elysium--create-diff-chunks orig-lines new-lines))
+         (chunks (relysium--create-diff-chunks orig-lines new-lines))
          (insertion-point start))
 
     ;; Insert each chunk with appropriate conflict markers
@@ -563,7 +563,7 @@ against NEW-CODE, using conflict markers for each meaningful chunk."
               (insert new-text "\n"))
             (insert ">>>>>>> " (gptel-backend-name gptel-backend) "\n"))))))))
 
-(defun elysium--create-diff-chunks (orig-lines new-lines)
+(defun relysium--create-diff-chunks (orig-lines new-lines)
   "Create a list of diff chunks between ORIG-LINES and NEW-LINES.
 Each chunk is of the form (TYPE ORIG-CHUNK NEW-CHUNK) where:
 - TYPE is either 'same or 'diff
@@ -697,33 +697,33 @@ For 'same chunks, ORIG-CHUNK and NEW-CHUNK contain the same lines."
     ;; Return the chunks in correct order
     (reverse chunks)))
 
-(defun elysium-clear-buffer ()
+(defun relysium-clear-buffer ()
   "Clear the elysium buffer."
   (interactive)
-  (with-current-buffer elysium--chat-buffer
+  (with-current-buffer relysium--chat-buffer
     (erase-buffer)
     (insert (gptel-prompt-prefix-string))))
 
-(defun elysium-add-context (content)
+(defun relysium-add-context (content)
   "Add CONTENT as context to the elysium chat buffer."
   (interactive
    (list (if (region-active-p)
              (buffer-substring-no-properties (region-beginning) (region-end))
            (buffer-substring-no-properties (point-min) (point-max)))))
   ;; Ensure chat buffer exists
-  (unless (buffer-live-p elysium--chat-buffer)
-    (setq elysium--chat-buffer (gptel "*elysium*")))
+  (unless (buffer-live-p relysium--chat-buffer)
+    (setq relysium--chat-buffer (gptel "*elysium*")))
 
   (let ((code-buffer-language
          (string-trim-right
           (string-trim-right (symbol-name major-mode) "-ts-mode$") "-mode$")))
-    (with-current-buffer elysium--chat-buffer
+    (with-current-buffer relysium--chat-buffer
       (goto-char (point-max))
       (insert "\n")
       (insert (format "```%s\n%s\n```" code-buffer-language content))
       (insert "\n"))))
 
-(defun elysium-keep-all-suggested-changes ()
+(defun relysium-keep-all-suggested-changes ()
   "Keep all of the LLM suggestions."
   (interactive)
   (save-excursion
@@ -734,32 +734,32 @@ For 'same chunks, ORIG-CHUNK and NEW-CHUNK contain the same lines."
     (smerge-mode -1)
     (message "All suggested changes applied")))
 
-(defun elysium-discard-all-suggested-changes ()
+(defun relysium-discard-all-suggested-changes ()
   "Discard all of the LLM suggestions."
   (interactive)
   (undo)
   (smerge-mode -1)
   (message "All suggested changes discarded"))
 
-(defun elysium-navigate-next-change ()
+(defun relysium-navigate-next-change ()
   "Navigate to the next change suggestion and keep the transient menu active."
   (interactive)
   (if (ignore-errors (smerge-next))
       (message "Navigated to next change")
     (message "No more changes"))
   ;; Keep the transient menu active
-  (elysium-transient-menu))
+  (relysium-transient-menu))
 
-(defun elysium-navigate-prev-change ()
+(defun relysium-navigate-prev-change ()
   "Navigate to the previous change suggestion and keep the transient menu active."
   (interactive)
   (if (ignore-errors (smerge-prev))
       (message "Navigated to previous change")
     (message "No more changes"))
   ;; Keep the transient menu active
-  (elysium-transient-menu))
+  (relysium-transient-menu))
 
-(defun elysium-keep-current-change ()
+(defun relysium-keep-current-change ()
   "Keep the current suggested change and move to the next one."
   (interactive)
   (smerge-keep-lower)
@@ -769,9 +769,9 @@ For 'same chunks, ORIG-CHUNK and NEW-CHUNK contain the same lines."
         (smerge-mode -1))
     (message "Applied change - move to next")
     ;; Keep the transient menu active if there are more changes
-    (elysium-transient-menu)))
+    (relysium-transient-menu)))
 
-(defun elysium-reject-current-change ()
+(defun relysium-reject-current-change ()
   "Reject the current suggested change and move to the next one."
   (interactive)
   (smerge-keep-upper)
@@ -781,22 +781,22 @@ For 'same chunks, ORIG-CHUNK and NEW-CHUNK contain the same lines."
         (smerge-mode -1))
     (message "Rejected change - move to next")
     ;; Keep the transient menu active if there are more changes
-    (elysium-transient-menu)))
+    (relysium-transient-menu)))
 
-(defun elysium-retry-query ()
+(defun relysium-retry-query ()
   "Retry the last query with modifications, preserving the previously marked region."
   (interactive)
-  (let ((new-query (read-string "Modify query: " elysium--last-query)))
+  (let ((new-query (read-string "Modify query: " relysium--last-query)))
     (when new-query
-      (with-current-buffer elysium--last-code-buffer
+      (with-current-buffer relysium--last-code-buffer
         ;; Discard current suggestions
-        (elysium-discard-all-suggested-changes)
+        (relysium-discard-all-suggested-changes)
 
         ;; Restore the region if a region was previously used
-        (when (buffer-local-value 'elysium--using-region elysium--last-code-buffer)
+        (when (buffer-local-value 'relysium--using-region relysium--last-code-buffer)
           (let* ((point-min (point-min))
-                 (start-line (buffer-local-value 'elysium--region-start-line elysium--last-code-buffer))
-                 (end-line (buffer-local-value 'elysium--region-end-line elysium--last-code-buffer))
+                 (start-line (buffer-local-value 'relysium--region-start-line relysium--last-code-buffer))
+                 (end-line (buffer-local-value 'relysium--region-end-line relysium--last-code-buffer))
                  start-pos end-pos)
             ;; Set point to start line
             (setq start-pos (goto-char point-min))
@@ -810,9 +810,9 @@ For 'same chunks, ORIG-CHUNK and NEW-CHUNK contain the same lines."
             (set-mark start-pos)))
 
         ;; Execute the new query
-        (elysium-query new-query)))))
+        (relysium-query new-query)))))
 
-(defun elysium--ordinal (n)
+(defun relysium--ordinal (n)
   "Convert integer N to its ordinal string representation."
   (let ((suffixes '("th" "st" "nd" "rd" "th" "th" "th" "th" "th" "th")))
     (if (and (> n 10) (< n 14))
@@ -821,19 +821,19 @@ For 'same chunks, ORIG-CHUNK and NEW-CHUNK contain the same lines."
               (nth (mod n 10) suffixes)))))
 
 ;; Add command to toggle debug mode
-(defun elysium-toggle-debug-mode ()
+(defun relysium-toggle-debug-mode ()
   "Toggle elysium debug mode."
   (interactive)
-  (setq elysium-debug-mode (not elysium-debug-mode))
-  (message "Elysium debug mode %s" (if elysium-debug-mode "enabled" "disabled"))
-  (when elysium-debug-mode
-    (display-buffer (get-buffer-create elysium-debug-buffer-name))))
+  (setq relysium-debug-mode (not relysium-debug-mode))
+  (message "Elysium debug mode %s" (if relysium-debug-mode "enabled" "disabled"))
+  (when relysium-debug-mode
+    (display-buffer (get-buffer-create relysium-debug-buffer-name))))
 
 ;; Add command to clear debug buffer
-(defun elysium-clear-debug-buffer ()
+(defun relysium-clear-debug-buffer ()
   "Clear the elysium debug buffer."
   (interactive)
-  (when-let ((buffer (get-buffer elysium-debug-buffer-name)))
+  (when-let ((buffer (get-buffer relysium-debug-buffer-name)))
     (with-current-buffer buffer
       (erase-buffer)
       (insert (format "[%s] Debug buffer cleared\n\n"
@@ -841,47 +841,47 @@ For 'same chunks, ORIG-CHUNK and NEW-CHUNK contain the same lines."
 
 
 ;; Define a transient menu for Elysium with compact layout
-(transient-define-prefix elysium-transient-menu ()
+(transient-define-prefix relysium-transient-menu ()
   "Elysium actions menu."
   ["Actions"
    :class transient-row
-   ("n" "Next" elysium-navigate-next-change)
-   ("p" "Prev" elysium-navigate-prev-change)
-   ("a" "Accept" elysium-keep-current-change)
-   ("d" "Reject" elysium-reject-current-change)
-   ("RET" "Accept all" elysium-keep-all-suggested-changes)
-   ("x" "Discard all" elysium-discard-all-suggested-changes)
-   ("r" "Retry" elysium-retry-query)
+   ("n" "Next" relysium-navigate-next-change)
+   ("p" "Prev" relysium-navigate-prev-change)
+   ("a" "Accept" relysium-keep-current-change)
+   ("d" "Reject" relysium-reject-current-change)
+   ("RET" "Accept all" relysium-keep-all-suggested-changes)
+   ("x" "Discard all" relysium-discard-all-suggested-changes)
+   ("r" "Retry" relysium-retry-query)
    ("q" "Quit" transient-quit-one)])
 
 
-;; Add key binding for C-<return> (Ctrl+Enter) to trigger elysium-query in prog-mode
-(defun elysium-query-dwim ()
+;; Add key binding for C-<return> (Ctrl+Enter) to trigger relysium-query in prog-mode
+(defun relysium-query-dwim ()
   "Query elysium with the region if active, otherwise prompt for a query."
   (interactive)
   (if (use-region-p)
-      (call-interactively 'elysium-query)
+      (call-interactively 'relysium-query)
     (let ((current-prefix-arg '(4))) ; Simulate C-u prefix to prompt for region
-      (call-interactively 'elysium-query))))
+      (call-interactively 'relysium-query))))
 
 ;;;###autoload
-(define-minor-mode elysium-prog-mode
+(define-minor-mode relysium-prog-mode
   "Minor mode for elysium in programming modes.
 Provides keybindings and integration for elysium code assistance."
   :lighter " Elysium"
   :keymap (let ((map (make-sparse-keymap)))
-            (define-key map (kbd "C-<return>") 'elysium-query-dwim)
-            (define-key map (kbd "C-c a") 'elysium-ask)
-            (define-key map (kbd "C-c e t") 'elysium-toggle-window)
-            (define-key map (kbd "C-c e a") 'elysium-add-context)
-            (define-key map (kbd "C-c e c") 'elysium-ask)
-            (define-key map (kbd "C-c e d") 'elysium-clear-buffer)
-            (define-key map (kbd "C-c e L") 'elysium-toggle-debug-mode)
-            (define-key map (kbd "C-c e l") 'elysium-debug-log)
-            (define-key map (kbd "C-c e m") 'elysium-transient-menu)
+            (define-key map (kbd "C-<return>") 'relysium-query-dwim)
+            (define-key map (kbd "C-c a") 'relysium-ask)
+            (define-key map (kbd "C-c e t") 'relysium-toggle-window)
+            (define-key map (kbd "C-c e a") 'relysium-add-context)
+            (define-key map (kbd "C-c e c") 'relysium-ask)
+            (define-key map (kbd "C-c e d") 'relysium-clear-buffer)
+            (define-key map (kbd "C-c e L") 'relysium-toggle-debug-mode)
+            (define-key map (kbd "C-c e l") 'relysium-debug-log)
+            (define-key map (kbd "C-c e m") 'relysium-transient-menu)
             map))
 
 
-(provide 'elysium)
+(provide 'relysium)
 
-;;; elysium.el ends here
+;;; relysium.el ends here

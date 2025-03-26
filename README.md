@@ -1,6 +1,6 @@
 # RElysium
 
-This package lets you automatically apply AI-generated code suggestions as you code. Use `M-x elysium-query` to request and apply changes seamlessly within Emacs. Here's how to install and use RElysium.
+This package lets you automatically apply AI-generated code suggestions as you code. Use `M-x relysium-query` to request and apply changes seamlessly within Emacs. Here's how to install and use RElysium.
 
 https://github.com/user-attachments/assets/275e292e-c480-48d1-9a13-27664c0bbf12
 
@@ -14,10 +14,10 @@ You can make queries on a region or the entire buffer without leaving the code b
 #### Using Quelpa
 
    ```emacs-lisp
-   (use-package elysium
-     :quelpa (elysium :fetcher github :repo "bluzky/relysium")
+   (use-package relysium
+     :quelpa (relysium :fetcher github :repo "bluzky/relysium")
      :config
-     (add-hook 'prog-mode-hook 'elysium-prog-mode))
+     (add-hook 'prog-mode-hook 'relysium-prog-mode))
    ```
 
 #### RElysium depends on `gptel`, so you have to install and configure `gptel` before using.
@@ -27,10 +27,10 @@ You can make queries on a region or the entire buffer without leaving the code b
 Customize RElysium by setting variables in your Emacs configuration. Here are some examples:
 
 ```emacs-lisp
-(use-package elysium
+(use-package relysium
   :custom
-  (elysium-window-size 0.33) ; The RElysium buffer will take up 1/3 of your screen.
-  (elysium-window-style 'vertical)) ; Can be 'vertical', 'horizontal', or nil.
+  (relysium-window-size 0.33) ; The RElysium buffer will take up 1/3 of your screen.
+  (relysium-window-style 'vertical)) ; Can be 'vertical', 'horizontal', or nil.
 ```
 
 
@@ -48,20 +48,20 @@ Customize RElysium by setting variables in your Emacs configuration. Here are so
 
 | Function                                | Key Binding        | Description                                            |
 |-----------------------------------------|--------------------|--------------------------------------------------------|
-| `elysium-query`                         | `C-<return>`       | With a selected region, send a query to the `gptel` backend.            |
-| `elysium-ask`                         | `C-c a`       | With a selected region, ask something about it.            |
-| `elysium-toggle-window`                 | `C-c e t`          | Toggle the RElysium chat window.                        |
-| `elysium-keep-all-suggested-changes`    | `RET`              | Keep all AI-suggested changes.                         |
-| `elysium-discard-all-suggested-changes` | `x`                | Discard all AI-suggested changes.                      |
-| `elysium-clear-buffer`                  | `C-c e c`          | Clear the RElysium buffer.                            |
-| `elysium-add-context`                   | `C-c e a`          | Add region or buffer content to the RElysium buffer.    |
-| `elysium-navigate-next-change`          | `n`                | Go to the next conflicting hunk.                       |
-| `elysium-navigate-prev-change`          | `p`                | Go to the previous conflicting hunk.                   |
-| `elysium-keep-current-change`           | `a`                | Accept the current suggested change and move to next.    |
-| `elysium-reject-current-change`         | `d`                | Reject the current suggested change and move to next.    |
-| `elysium-retry-query`                   | `r`                | Retry the last query with modifications (region-aware).|
-| `elysium-toggle-debug-mode`             | `C-c e L`          | Toggle debug mode, showing debug logs.                 |
-| `elysium-debug-log`            | `C-c e l`          | View the debug buffer.                                |
+| `relysium-query`                         | `C-<return>`       | With a selected region, send a query to the `gptel` backend.            |
+| `relysium-ask`                         | `C-c a`       | With a selected region, ask something about it.            |
+| `relysium-toggle-window`                 | `C-c e t`          | Toggle the RElysium chat window.                        |
+| `relysium-keep-all-suggested-changes`    | `RET`              | Keep all AI-suggested changes.                         |
+| `relysium-discard-all-suggested-changes` | `x`                | Discard all AI-suggested changes.                      |
+| `relysium-clear-buffer`                  | `C-c e c`          | Clear the RElysium buffer.                            |
+| `relysium-add-context`                   | `C-c e a`          | Add region or buffer content to the RElysium buffer.    |
+| `relysium-navigate-next-change`          | `n`                | Go to the next conflicting hunk.                       |
+| `relysium-navigate-prev-change`          | `p`                | Go to the previous conflicting hunk.                   |
+| `relysium-keep-current-change`           | `a`                | Accept the current suggested change and move to next.    |
+| `relysium-reject-current-change`         | `d`                | Reject the current suggested change and move to next.    |
+| `relysium-retry-query`                   | `r`                | Retry the last query with modifications (region-aware).|
+| `relysium-toggle-debug-mode`             | `C-c e L`          | Toggle debug mode, showing debug logs.                 |
+| `relysium-debug-log`            | `C-c e l`          | View the debug buffer.                                |
 
 
 # Notes
