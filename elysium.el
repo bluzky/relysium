@@ -81,14 +81,14 @@ Must be a number between 0 and 1, exclusive."
   :group 'elysium
   :type 'string)
 
-(defvar elysium-ask-system-prompt
+(defvar elysium-ask-prompt
   "You are an expert programmer and coding assistant.
 Your task is to provide helpful, accurate, and relevant information about the code provided.
 Be concise yet thorough in your explanations.
 Your answers should be clear, informative, and directly related to the code provided.
 Your answer should be short and focus ONLY on the questions asked.")
 
-(defvar elysium-base-prompt "Your task is to create exact code modifications with explicit line number ranges.
+(defvar elysium-edit-prompt "Your task is to create exact code modifications with explicit line number ranges.
 Act as an expert software developer.
 Always use best practices when coding.
 Respect and use existing conventions, libraries, etc that are already present in the code base.
@@ -224,7 +224,7 @@ def add(a, b):
       (deactivate-mark)
 
       (gptel-request full-prompt
-        :system elysium-ask-system-prompt
+        :system elysium-ask-prompt
         :buffer chat-buffer
         :callback 'elysium-ask-callback))))
 
@@ -366,7 +366,7 @@ _INFO is unused but required by the gptel callback interface."
       (insert "\n\n"))
 
     (gptel-request full-query
-      :system elysium-base-prompt
+      :system elysium-edit-prompt
       :buffer chat-buffer
       :callback (apply-partially #'elysium-handle-response code-buffer))))
 
