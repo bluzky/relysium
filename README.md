@@ -1,6 +1,6 @@
 # RElysium
 
-This package lets you automatically apply AI-generated code suggestions as you code. Use `M-x relysium-query` to request and apply changes seamlessly within Emacs. Here's how to install and use RElysium.
+## Brind joy to coding!
 
 https://github.com/user-attachments/assets/275e292e-c480-48d1-9a13-27664c0bbf12
 
