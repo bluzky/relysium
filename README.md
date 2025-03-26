@@ -14,10 +14,11 @@ You can make queries on a region or the entire buffer without leaving the code b
 #### Using Quelpa
 
    ```emacs-lisp
-   (use-package relysium
-     :quelpa (relysium :fetcher github :repo "bluzky/relysium")
-     :config
-     (add-hook 'prog-mode-hook 'relysium-prog-mode))
+(use-package relysium
+  :quelpa (relysium :fetcher github
+                    :repo "bluzky/relysium"
+                    :branch "main")
+  :hook (prog-mode . relysium-prog-mode))
    ```
 
 #### RElysium depends on `gptel`, so you have to install and configure `gptel` before using.
