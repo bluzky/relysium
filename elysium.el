@@ -1,11 +1,11 @@
 ;;; elysium.el --- Automatically apply LLM-created code-suggestions -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2024  Lance Bergeron
+;; No Copyright for my changes :v
 
-;; Author: Lance Bergeron <bergeron.lance6@gmail.com>
-;; Version: 0.0.1
+;; Author: Daniel Nguyen <bluesky.1289@gmail.com>
+;; Version: 0.1.0
 ;; Package-Requires: ((emacs "27.1") (gptel "0.9.0"))
-;; URL: https://github.com/lanceberge/elysium/
+;; URL: https://github.com/bluzky/relysium/
 
 ;; This program is free software; you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -34,7 +34,6 @@
 (require 'gptel)
 (require 'smerge-mode)
 (require 'transient)
-(require 'diff-mode)
 
 (defgroup elysium nil
   "Apply code changes using gptel."
@@ -82,29 +81,79 @@ Must be a number between 0 and 1, exclusive."
   :group 'elysium
   :type 'string)
 
+(defvar elysium-ask-system-prompt
+  "You are an expert programmer and coding assistant.
+Your task is to provide helpful, accurate, and relevant information about the code provided.
+Be concise yet thorough in your explanations.
+Your answers should be clear, informative, and directly related to the code provided.
+Your answer should be short and focus ONLY on the questions asked.")
 
-(setq elysium-base-prompt
-  (concat
-"Your primary task is to suggest code modifications with precise line numbers:\n"
-"1. Count ALL lines starting from 1 (including empty lines and comments).\n"
-"2. Use this exact format:\n"
-"   Replace lines: {start_line}-{end_line}\n"
-"   ```{language}\n"
-"   {suggested_code}\n"
-"   ```\n"
-"   {brief explanation}\n"
-"3. Important rules:\n"
-"   - Line ranges are INCLUSIVE\n"
-"   - Make ONLY the requested changes\n"
-"   - Maintain original indentation and comments\n"
-"   - Include COMPLETE code for the specified range\n"
-"   - Use the same language as the question\n"
-"4. Verify before submitting:\n"
-"   - Line numbers are accurate\n"
-"   - All affected lines are included\n"
-"   - No unrelated code is modified\n"
-"DO NOT show the full content after modifications.\n"
-))
+(defvar elysium-base-prompt "Your task is to create exact code modifications with explicit line number ranges.
+Act as an expert software developer.
+Always use best practices when coding.
+Respect and use existing conventions, libraries, etc that are already present in the code base.
+
+Make sure code comments are in English when generating them.
+
+Your task is to modify the provided code according to the user's request. Follow these instructions precisely:
+
+1. Line numbering requirements:
+   - Count EVERY line starting from 1, including all empty lines, comments, and whitespace lines
+   - Line ranges are ALWAYS inclusive (both start_line and end_line are part of the replacement)
+   - For single-line changes, use identical numbers for start and end (e.g., 42-42)
+
+2. Response rules:
+   - *DO NOT* include three backticks: ``` in your suggestion! Treat the suggested code AS IS.
+   - The code you return must be wrapped in <code></code>, and cannot contain any other code.
+   - *MUST* strictly follows format:
+   Replace lines: {start_line}-{end_line}
+   <code>
+   {complete_replacement_code}
+   </code>
+
+3. Code modification rules:
+   - *DO NOT* include any explanations, comments.
+   - Ensure the returned code is complete and can be directly used as a replacement for the original code.
+   - Preserve the original structure, indentation, and formatting of the code as much as possible.
+   - Only modify the specific lines requested in the range - no more, no less
+   - Maintain the *SAME INDENTATION* in the returned code as in the source code
+   - *ONLY* return the new code snippets to be updated, *DO NOT* return the entire file content.
+
+4. Multi-change handling:
+   - For multiple distinct changes, provide separate 'Replace lines:' blocks for each change
+   - Do not overlap line ranges between different changes
+   - List changes in ascending line number order
+
+Remember that Your response SHOULD CONTAIN ONLY THE MODIFIED CODE to be used as DIRECT REPLACEMENT to the original file.
+
+There is an example below:
+
+Original code:
+```python
+def add(a, b):
+    return a + b
+
+result = add(2, 3)
+print(result)
+```
+
+Selected code:
+Line range: 1-2
+```python
+def add(a, b):
+    return a + b
+```
+
+User request:
+Print the result
+
+Your response:
+Replace lines: 1-1
+<code>
+def add(a, b):
+    print(a + b)
+</code>
+")
 
 (defun elysium-toggle-window ()
   "Toggle the elysium chat window."
@@ -138,6 +187,110 @@ Must be a number between 0 and 1, exclusive."
       (other-window 1)
       (set-window-buffer (selected-window) elysium--chat-buffer))))
 
+;;;###autoload
+(defun elysium-ask (user-prompt)
+  "Ask a question about the selected code region"
+  (interactive "sAsk about code: ")
+  (if (not (use-region-p))
+      (message "Please select a region of code first")
+    ;; Region is selected, proceed with LLM query
+    (unless (buffer-live-p elysium--chat-buffer)
+      (setq elysium--chat-buffer (gptel "*elysium*")))
+
+    (let* ((chat-buffer elysium--chat-buffer)
+           (selected-code (buffer-substring-no-properties (region-beginning) (region-end)))
+           (file-type (symbol-name major-mode))
+           (lang-name (replace-regexp-in-string "-mode$\\|-ts-mode$" "" file-type))
+           ;; Create the full prompt with code context
+           (full-prompt (format "Code (%s):\n```%s\n%s\n```\n\nQuestion: %s"
+                                lang-name
+                                lang-name
+                                selected-code
+                                user-prompt)))
+
+      ;; Update chat buffer with the query
+      (with-current-buffer chat-buffer
+        (goto-char (point-max))
+        (insert "\n\n### USER:\n")
+        (insert full-prompt)
+        (insert "\n"))
+
+      ;; Show the chat window
+      (elysium-setup-windows)
+
+      ;; Update status and send request
+      (gptel--update-status " Waiting..." 'warning)
+      (message "Asking LLM about selected code...")
+      (deactivate-mark)
+
+      (gptel-request full-prompt
+        :system elysium-ask-system-prompt
+        :buffer chat-buffer
+        :callback 'elysium-ask-callback))))
+
+(defun elysium-ask-callback (response _info)
+  "Handle the RESPONSE from LLM for elysium-ask.
+_INFO is unused but required by the gptel callback interface."
+  (when response
+    (with-current-buffer elysium--chat-buffer
+      (goto-char (point-max))
+      (insert "\n\n### ASSISTANT:\n")
+      (insert response)
+      (insert "\n")
+
+      ;; Update status
+      (gptel--sanitize-model)
+      (gptel--update-status " Ready" 'success))
+    (message "LLM response received")))
+
+(defun trim-empty-lines-and-adjust (string start-line end-line)
+  "Trim leading and trailing empty lines and adjust line numbers."
+  (with-temp-buffer
+    ;; Insert the string into a temporary buffer
+    (insert string)
+
+    ;; Count leading empty lines
+    (goto-char (point-min))
+    (let ((leading-empty-lines 0)
+          (trailing-empty-lines 0)
+          (adjusted-start-line start-line)
+          (adjusted-end-line end-line)
+          (trimmed-string nil))
+
+      ;; Count leading empty lines
+      (while (and (not (eobp))
+                  (looking-at "^\\s-*$"))
+        (setq leading-empty-lines (1+ leading-empty-lines))
+        (forward-line 1))
+
+      ;; Count trailing empty lines
+      (goto-char (point-max))
+      (when (not (bobp))
+        (forward-line -1))
+      (while (and (not (bobp))
+                  (looking-at "^\\s-*$"))
+        (setq trailing-empty-lines (1+ trailing-empty-lines))
+        (forward-line -1))
+
+      ;; Adjust start and end line numbers
+      (setq adjusted-start-line (+ start-line leading-empty-lines))
+      (setq adjusted-end-line (- end-line trailing-empty-lines))
+
+      ;; Extract the trimmed string
+      (goto-char (point-min))
+      (when (> leading-empty-lines 0)
+        (forward-line leading-empty-lines)
+        (delete-region (point-min) (point)))
+
+      (goto-char (point-max))
+      (when (> trailing-empty-lines 0)
+        (forward-line (- trailing-empty-lines))
+        (delete-region (point) (point-max)))
+
+      (setq trimmed-string (buffer-string))
+
+      ;; Return a list with the trimmed string and adjusted line numbers
+      (list trimmed-string adjusted-start-line adjusted-end-line))))
 
 ;;;###autoload
 (defun elysium-query (user-query)
@@ -167,17 +320,25 @@ Must be a number between 0 and 1, exclusive."
                              (progn (backward-char 1)
                                     (line-end-position))
                            (line-end-position))))
+         (selected-code (buffer-substring-no-properties start-line-pos end-line-pos))
          (start-line (line-number-at-pos start-line-pos))
          (end-line (line-number-at-pos end-line-pos))
-         (selected-code (buffer-substring-no-properties start-line-pos end-line-pos))
+         (cursor-line (line-number-at-pos (point)))
          (file-type (symbol-name major-mode))
+         ;; Apply trimming and line adjustment
+         (adjustment-result (when using-region
+                              (trim-empty-lines-and-adjust selected-code start-line end-line)))
+         (final-code (if using-region (nth 0 adjustment-result) selected-code))
+         (final-start-line (if using-region (nth 1 adjustment-result) start-line))
+         (final-end-line (if using-region (nth 2 adjustment-result) end-line))
          ;; Include indentation info in the query
-         (full-query (format "\n\nFile type: %s\nLine range: %d-%d\n%s\n\nCode:\n```\n%s\n```\n\n%s"
+         (full-query (format "\n\nFile type: %s\nLine range: %d-%d\nCursor line: %d\n%s\n\nCode:\n```\n%s\n```\n\n%s"
                              file-type
-                             start-line
-                             end-line
+                             final-start-line
+                             final-end-line
+                             cursor-line
                              ""
-                             selected-code
+                             final-code
                              user-query)))
 
     (setq elysium--last-query user-query)
@@ -185,13 +346,19 @@ Must be a number between 0 and 1, exclusive."
 
     ;; Store region info for later use
     (setq-local elysium--using-region using-region)
-    (setq-local elysium--region-start-line start-line)
-    (setq-local elysium--region-end-line end-line)
+    (setq-local elysium--region-start-line final-start-line)
+    (setq-local elysium--region-end-line final-end-line)
+
+    (with-current-buffer chat-buffer
+      (goto-char (point-max))
+      (insert "\n\n### USER:\n")
+      (insert full-query)
+      (insert "\n"))
 
     (gptel--update-status " Waiting..." 'warning)
     (message "Querying %s for lines %d-%d..."
              (gptel-backend-name gptel-backend)
-             start-line end-line)
+             final-start-line final-end-line)
     (deactivate-mark)
     (with-current-buffer chat-buffer
       (goto-char (point-max))
@@ -211,18 +378,24 @@ INFO is passed into this function from the `gptel-request' function."
     ;; Log the full response if debug mode is enabled
     (elysium-debug-log "LLM Response:\n%s" response)
 
+    ;; Add this section to show the full response in the chat buffer
+    (with-current-buffer elysium--chat-buffer
+      (goto-char (point-max))
+      (insert "\n\n### ASSISTANT:\n")
+      (insert response)
+      (insert "\n\n### "))
+
     (let* ((extracted-data (elysium-extract-changes response))
            (changes (plist-get extracted-data :changes))
            (using-region (buffer-local-value 'elysium--using-region code-buffer)))
 
       ;; Log the extracted changes if debug mode is enabled
       (when elysium-debug-mode
-        (elysium-debug-log "Extracted %d change(s)" (length changes))
-        (dolist (change changes)
-          (elysium-debug-log "Change - Lines %d-%d:\n%s"
-                             (plist-get change :start)
-                             (plist-get change :end)
-                             (plist-get change :code))))
+        (elysium-debug-log "Extracted %d change(s)" (length changes)))
+
+      ;; mark undo boundary
+      (undo-boundary)
+
 
       (when changes
         ;; Apply changes
@@ -276,35 +449,24 @@ Makes sure changes are properly aligned with the actual lines in the buffer."
   changes)
 
 (defun elysium-extract-changes (response)
-  "Extract the code-changes and explanations from RESPONSE.
-Explanations will be of the format:
-{Initial explanation}
-
-1st Code Change:
+  "Extract the code-changes from RESPONSE.
+Replace lines: 1-2
+<code>
 {Code Change}
+</code>
 
-2nd Code Change:
-{Code Change}"
+Replace lines: 4-4
+<code>
+{Code Change}
+</code>"
   (let ((changes '())
-        (explanations '())
         (start 0)
-        (change-count 0)
         (code-block-regex
-         "Replace [Ll]ines:? \\([0-9]+\\)-\\([0-9]+\\)\n```\\(?:[[:alpha:]-]+\\)?\n\\(\\(?:.\\|\n\\)*?\\)```"))
+         "Replace [Ll]ines:? \\([0-9]+\\)-\\([0-9]+\\)\n<code>\n\\(\\(?:.\\|\n\\)*?\\(?:\n\\)\\)</code>"))
     (while (string-match code-block-regex response start)
       (let ((change-start (string-to-number (match-string 1 response)))
             (change-end (string-to-number (match-string 2 response)))
-            (code (match-string 3 response))
-            (explanation-text (substring response start (match-beginning 0))))
-        ;; the initial explanation won't be preceded by nth Code Change
-        (when (not (string-empty-p explanation-text))
-          (push (if (= 0 change-count)
-                    explanation-text  ; For the first explanation, just use the text as is
-                  (format "%s Code Change:\n%s"
-                          (elysium--ordinal change-count)
-                          explanation-text))
-                explanations)
-          (setq change-count (1+ change-count)))
+            (code (match-string 3 response)))
         (push (list :start change-start
                     :end change-end
                     :code code)
@@ -312,18 +474,7 @@ Explanations will be of the format:
 
         ;; Update start index in the response string
         (setq start (match-end 0))))
-
-    ;; Add any remaining text as the last explanation
-    (let ((remaining-text (substring response start)))
-      (when (not (string-empty-p remaining-text))
-        (push (if (= 0 change-count)
-                  remaining-text
-                (format "%s Code Change:\n%s"
-                        (elysium--ordinal change-count)
-                        remaining-text))
-              explanations)))
-    (list :explanations (nreverse explanations)
-          :changes (nreverse changes))))
+    (list :changes (nreverse changes))))
 
 (defun elysium-apply-code-changes (buffer code-changes)
   "Apply CODE-CHANGES to BUFFER in a git merge format.
@@ -336,7 +487,7 @@ for easier review."
         (dolist (change code-changes)
           (let* ((start (plist-get change :start))
                  (end (plist-get change :end))
-                 (new-code (string-trim-right (plist-get change :code)))
+                 (new-code (plist-get change :code))
                  (orig-code-start (progn
                                     (goto-char (point-min))
                                     (forward-line (1- (+ start offset)))
@@ -348,8 +499,8 @@ for easier review."
                  (orig-code (buffer-substring-no-properties orig-code-start orig-code-end)))
 
             ;; If the change is multi-line, try to refine the diff
-            (if (and (> (length (split-string orig-code "\n" t)) 1)
-                     (> (length (split-string new-code "\n" t)) 1))
+            (if (and (> (length (split-string orig-code "\n")) 1)
+                     (> (length (split-string new-code "\n")) 1))
                 (elysium--apply-refined-change orig-code-start orig-code-end orig-code new-code)
               ;; For single-line changes or very small changes, use the simple approach
               (elysium--apply-simple-change orig-code-start orig-code-end orig-code new-code))
@@ -368,10 +519,10 @@ containing both ORIG-CODE and NEW-CODE."
   (delete-region start end)
   (goto-char start)
   (insert (concat "<<<<<<< HEAD\n"
-                 orig-code
-                 "=======\n"
-                 new-code
-                 "\n>>>>>>> " (gptel-backend-name gptel-backend) "\n")))
+                  orig-code
+                  "=======\n"
+                  new-code
+                  "\n>>>>>>> " (gptel-backend-name gptel-backend) "\n")))
 
 (defun elysium--apply-refined-change (start end orig-code new-code)
   "Apply a refined change that breaks code into smaller conflict chunks.
@@ -381,8 +532,8 @@ against NEW-CODE, using conflict markers for each meaningful chunk."
   (goto-char start)
 
   ;; Split both code blocks into lines
-  (let* ((orig-lines (split-string orig-code "\n" t))
-         (new-lines (split-string new-code "\n" t))
+  (let* ((orig-lines (split-string orig-code "\n"))
+         (new-lines (split-string new-code "\n"))
          (chunks (elysium--create-diff-chunks orig-lines new-lines))
          (insertion-point start))
 
@@ -402,8 +553,8 @@ against NEW-CODE, using conflict markers for each meaningful chunk."
 
          ;; Lines that differ - add conflict markers
          ((eq chunk-type 'diff)
-          (let ((orig-text (string-join (reverse orig-chunk-lines) "\n"))
-                (new-text (string-join (reverse new-chunk-lines) "\n")))
+          (let ((orig-text (string-join orig-chunk-lines "\n"))
+                (new-text (string-join new-chunk-lines "\n")))
             (insert "<<<<<<< HEAD\n")
             (when (> (length orig-text) 0)
               (insert orig-text "\n"))
@@ -427,8 +578,7 @@ For 'same chunks, ORIG-CHUNK and NEW-CHUNK contain the same lines."
         (new-len (length new-lines))
         (current-chunk-type nil)
         (current-orig-chunk nil)
-        (current-new-chunk nil)
-        (context-lines 1)) ; Number of context lines to keep before/after changes
+        (current-new-chunk nil))
 
     ;; Compare lines and build chunks
     (while (or (< i orig-len) (< j new-len))
@@ -443,7 +593,7 @@ For 'same chunks, ORIG-CHUNK and NEW-CHUNK contain the same lines."
             (progn
               ;; If we were in a 'diff' chunk, finalize it
               (when (eq current-chunk-type 'diff)
-                (push (list 'diff current-orig-chunk current-new-chunk) chunks)
+                (push (list 'diff (reverse current-orig-chunk) (reverse current-new-chunk)) chunks)
                 (setq current-orig-chunk nil
                       current-new-chunk nil))
 
@@ -528,8 +678,10 @@ For 'same chunks, ORIG-CHUNK and NEW-CHUNK contain the same lines."
 
                ;; No match found, just advance both
                (t
-                (push orig-line current-orig-chunk)
-                (push new-line current-new-chunk)
+                (when orig-line
+                  (push orig-line current-orig-chunk))
+                (when new-line
+                  (push new-line current-new-chunk))
                 (cl-incf i)
                 (cl-incf j)))))))
 
@@ -585,13 +737,9 @@ For 'same chunks, ORIG-CHUNK and NEW-CHUNK contain the same lines."
 (defun elysium-discard-all-suggested-changes ()
   "Discard all of the LLM suggestions."
   (interactive)
-  (save-excursion
-    (goto-char (point-min))
-    (ignore-errors (funcall #'smerge-keep-upper))
-    (while (ignore-errors (not (smerge-next)))
-      (funcall #'smerge-keep-upper))
-    (smerge-mode -1)
-    (message "All suggested changes discarded")))
+  (undo)
+  (smerge-mode -1)
+  (message "All suggested changes discarded"))
 
 (defun elysium-navigate-next-change ()
   "Navigate to the next change suggestion and keep the transient menu active."
@@ -689,7 +837,7 @@ For 'same chunks, ORIG-CHUNK and NEW-CHUNK contain the same lines."
     (with-current-buffer buffer
       (erase-buffer)
       (insert (format "[%s] Debug buffer cleared\n\n"
-                       (format-time-string "%Y-%m-%d %H:%M:%S"))))))
+                      (format-time-string "%Y-%m-%d %H:%M:%S"))))))
 
 
 ;; Define a transient menu for Elysium with compact layout
@@ -720,12 +868,14 @@ For 'same chunks, ORIG-CHUNK and NEW-CHUNK contain the same lines."
 (defvar elysium-prog-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "C-<return>") 'elysium-query-dwim)
+    (define-key map (kbd "C-c a") 'elysium-ask)
     (define-key map (kbd "C-c e t") 'elysium-toggle-window)
     (define-key map (kbd "C-c e a") 'elysium-add-context)
-    (define-key map (kbd "C-c e c") 'elysium-clear-buffer)
-    (define-key map (kbd "C-c e d") 'elysium-toggle-debug-mode)
+    (define-key map (kbd "C-c e c") 'elysium-ask)
+    (define-key map (kbd "C-c e d") 'elysium-clear-buffer)
+    (define-key map (kbd "C-c e L") 'elysium-toggle-debug-mode)
     (define-key map (kbd "C-c e l") 'elysium-debug-log)
-    (define-key map (kbd "C-c e l") 'elysium-transient-menu)
+    (define-key map (kbd "C-c e m") 'elysium-transient-menu)
     map)
   "Keymap for elysium in programming modes.")
 
