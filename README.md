@@ -20,7 +20,7 @@
 
 # Demo
 
-https://github.com/user-attachments/assets/e0704424-d155-449f-9e85-51b6d915b648
+https://github.com/user-attachments/assets/d5f735d5-035e-4b48-b9f0-d0566360b01c
 
 # Installation
 #### Using Quelpa
