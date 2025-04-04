@@ -179,7 +179,10 @@ When AI suggests changes, a transient menu will appear with these options:
 This is my customization to fit my workflow. And it is a huge code changes. So I don't want to bother @lanceberge, because maybe the original version fit his workflow
 
 
-** Special thanks to @lanceberge for your original work on this package, and Claude AI which help me to actualize my ideas**
+**Special thanks to @lanceberge for your original work on this package, and Claude AI which help me to actualize my ideas**
 (Because I'm not good at Elisp :D)
+
+**2. Elysium is under GPL-3 license but your Relysium is under MIT license?**
+I only learn the idea from Elysium and rewrite the whole things: the prompt, the diff algorithm, the buffer management, transient menu, logic to patch the changes. And also I want people to be free to make any changes.
 
 **Enjoy seamless code suggestions and management with Relysium!**
