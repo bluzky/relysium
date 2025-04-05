@@ -1,130 +1,107 @@
-;;; relysium-edit.el --- Edit functionality for relysium -*- lexical-binding: t; -*-
+;;; relysium-edit.el --- Edit prompts for relysium -*- lexical-binding: t; -*-
 
 ;;; Commentary:
 ;;
-;; This file contains the functions related to editing code through
-;; LLM-generated suggestions using the relysium package.
+;; This file contains the prompt components and builders for the edit command.
 
 ;;; Code:
 
-(require 'gptel)
+(require 'relysium-utils)
+(require 'relysium-core)
 (require 'relysium-context)
-(require 'relysium-prompt-edit)  ; Import the edit prompt module
-(require 'relysium-buffer)
-(require 'relysium-patch)        ; Hypothetical unified patch module
 (require 'relysium-commands)
 
-(defvar relysium-retry-query)
 
-(defvar relysium--last-query nil
-  "The last query sent to the LLM.")
+;; Common components that could be shared across commands
+(defvar relysium-prompt-edit-base
+  "Act as an expert software developer.
+Always use best practices when coding.
+Respect and use existing conventions, libraries, etc that are already present in the code base.
 
-(defvar relysium--last-code-buffer nil
-  "The buffer that was last modified by Elysium.")
+Make sure code comments are in English when generating them.
+Your task is to modify the provided code according to the user's request. Follow these instructions precisely:")
+
+(defvar relysium-prompt-edit-format
+  "Response format rules:
+   - *DO NOT* include three backticks: ``` in your suggestion! Treat the suggested code AS IS.
+   - The code you return must be wrapped in <code></code>, and cannot contain any other <code>.")
+
+;; Edit-specific components
+(defvar relysium-prompt-edit-guidelines
+  "Code modification rules:
+   - *DO NOT* include any explanations, comments.
+   - Ensure the returned code is complete and can be directly used as a replacement for the original code.
+   - Only modify the specific lines requested in the range - no more, no less
+   - Maintain the *SAME INDENTATION* in the returned code as in the source code
+   - *ONLY* return the new code snippets to be updated, *DO NOT* return the entire file content.
+   - If no selected code is provided, *DO NOT* return the entire file content or any surrounding code.
+   - If no selected code is provided, suggest code modifications at the cursor position. Carefully analyze the original code, paying close attention to its structure and the cursor position
+
+Remember that Your response SHOULD CONTAIN ONLY THE MODIFIED CODE to be used as DIRECT REPLACEMENT to the original file.")
+
+(defvar relysium-prompt-edit-example
+  "There is an example below:
+
+Selected code:
+Line range: 1-2
+```python
+def add(a, b):
+    return a + b
+```
+
+User request:
+Modify code to print the result
+
+Your response:
+<code>
+def add(a, b):
+    print(a + b)
+    return a + b
+</code>")
+
+(defvar relysium-prompt-edit-user-template
+  "Language: ${language-name}
+Line range: ${start-line}-${end-line}
+
+Selected code: ${selected-code}
+
+Your task: ${user-query}")
+
+;; System prompt builder for edit command
+(defun relysium-prompt-edit-system ()
+  "Build the system prompt for edit command."
+  (relysium-build-prompt
+   (list
+    :a_intro relysium-prompt-edit-base
+    :b_format relysium-prompt-edit-format
+    :d_guidelines relysium-prompt-edit-guidelines
+    :e_example relysium-prompt-edit-example)))
+
 
 ;;;###autoload
 (defun relysium-edit (user-query)
-  "Send USER-QUERY to elysium from the current buffer."
+  "Send USER-QUERY to relysium from the current buffer."
   (interactive (list (read-string "User Query: ")))
 
-  (let* ((code-buffer (current-buffer))
-         (chat-buffer (relysium-buffer-get-chat-buffer))
-         ;; Get context using our unified function
-         (context (relysium-context-gather))
-         ;; Build prompts using our specialized builders
+  (let* ((context (relysium-context-gather))
          (system-prompt (relysium-prompt-edit-system))
-         (user-prompt (relysium-prompt-edit-user context user-query)))
+         (user-prompt (relysium-render-template relysium-prompt-edit-user-template (plist-put context :user-query user-query))))
 
-    ;; Store for later use
-    (setq relysium--last-query user-query)
-    (setq relysium--last-code-buffer code-buffer)
-
-    ;; Store region info locally in the chat buffer
-    (with-current-buffer chat-buffer
-      (setq-local relysium--using-region (plist-get context :using-region))
-      (setq-local relysium--region-start-line (plist-get context :start-line))
-      (setq-local relysium--region-end-line (plist-get context :end-line)))
-
-    ;; Update chat buffer and send request
-    (relysium-buffer-append-user-message user-prompt)
-
-    (with-current-buffer chat-buffer
-      (gptel--sanitize-model)
-      (gptel--update-status " Waiting..." 'warning))
-
-    (message "Querying %s for lines %d-%d..."
-             (gptel-backend-name gptel-backend)
-             (plist-get context :start-line)
-             (plist-get context :end-line))
-    (deactivate-mark)
-
-    (gptel-request user-prompt
-      :system system-prompt
-      :buffer chat-buffer
-      :callback (apply-partially #'relysium-handle-response code-buffer))))
-
-(defun relysium-handle-response (code-buffer response info)
-  "Handle the RESPONSE from gptel.
-The changes will be applied to CODE-BUFFER in a git merge format.
-INFO is passed into this function from the `gptel-request' function."
-  (when response
-    ;; Log the full response if debug mode is enabled
-    (relysium-debug-log "LLM Response:\n%s" response)
-
-    ;; Add this section to show the full response in the chat buffer
-    (relysium-buffer-append-assistant-message response)
-
-    ;; Use shared extraction utilities instead of local function
-    (let ((code-change (relysium-extraction-code-block response))
-          (chat-buffer (plist-get info :buffer)))
-
-      ;; Log the extracted code if debug mode is enabled
-      (relysium-debug-log "Extracted code change: %s"
-                          (if code-change
-                              (format "%s" code-change)
-                            "None found"))
-
-      ;; Apply change if code was extracted
-      (when code-change
-        ;; mark undo boundary
-        (with-current-buffer code-buffer
-          (undo-boundary))
-
-        ;; Get context from the chat buffer's local variables
-        (let* ((using-region (buffer-local-value 'relysium--using-region chat-buffer))
-               (start-line (buffer-local-value 'relysium--region-start-line chat-buffer))
-               (end-line (buffer-local-value 'relysium--region-end-line chat-buffer))
-               ;; Create change plist
-               (change (list :action 'replace
-                             :start start-line
-                             :end (if using-region (1+ end-line) start-line) ;; Use exclusive range
-                             :code code-change)))
-
-          ;; Apply using shared patch utilities
-          (relysium-patch-apply code-buffer (list change))
-
-          ;; Activate smerge mode and show transient menu
-          (with-current-buffer code-buffer
-            (smerge-mode 1)
-            (goto-char (point-min))
-            (ignore-errors (smerge-next))
-            ;; Set retry function to relysium-retry-query
-            (setq relysium-retry-query 'relysium-retry-query)
-            (relysium-transient-menu)))))
-
-    ;; Update status
-    (with-current-buffer chat-buffer
-      (gptel--update-status " Ready" 'success))
-    ))
+    (relysium-core-request
+     (list :context context
+           :system-prompt system-prompt
+           :user-prompt user-prompt
+           :response-handler #'relysium-core-process-code-block
+           :retry-fn #'relysium-retry-query))))
 
 (defun relysium-retry-query ()
-  "Retry the last query with modifications, preserving the previously marked region."
+  "Retry the last query with modifications."
   (interactive)
   (let ((new-query (read-string "Modify query: " relysium--last-query)))
     (when new-query
       (with-current-buffer relysium--last-code-buffer
         ;; Discard current suggestions
-        (relysium-discard-all-suggested-changes)
+        (relysium-discard-all-changes)
 
         ;; Restore the region if a region was previously used
         (let ((chat-buffer (relysium-buffer-get-chat-buffer)))
