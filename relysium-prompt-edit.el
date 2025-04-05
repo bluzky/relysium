@@ -6,7 +6,7 @@
 
 ;;; Code:
 
-(require 'relysium-prompt-utils)
+(require 'relysium-utils)
 
 ;; Common components that could be shared across commands
 (defvar relysium-prompt-edit-base

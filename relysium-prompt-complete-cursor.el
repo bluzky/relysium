@@ -7,7 +7,7 @@
 
 ;;; Code:
 
-(require 'relysium-prompt-utils)
+(require 'relysium-utils)
 
 ;; Base prompt components
 (defvar relysium-prompt-complete-cursor-base
