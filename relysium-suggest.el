@@ -4,6 +4,7 @@
 ;;
 ;; This file contains the prompt components and builders for the suggest command.
 ;; The suggest command analyzes code and provides targeted improvements.
+;; It can work on either the entire buffer or just a selected region.
 
 ;;; Code:
 
@@ -121,16 +122,34 @@ def calculate_total(items: list[float]) -> float:
 
    Remember that smaller, targeted suggestions are often more useful than complete rewrites.")
 
+;; Add region specific instructions
+(defvar relysium-prompt-suggest-region-guidelines
+  "Region-specific instructions:
+   - You are analyzing a selected region of a larger file
+   - Focus your suggestions ONLY on the code within the provided line range
+   - All suggestions MUST be within the bounds of the selection (from start_line to end_line inclusive)
+   - Be aware that the selected region may be a partial function or class definition
+   - The line numbers in your suggestions should match the absolute line numbers in the file")
+
 ;; System prompt builder for suggest command
-(defun relysium-prompt-suggest-system ()
-  "Build the system prompt for suggest command."
-  (relysium-build-prompt
-   (list
-    :a_intro relysium-prompt-suggest-base
-    :b_analysis relysium-prompt-suggest-contextual-analysis
-    :c_format relysium-prompt-suggest-format
-    :d_guidelines relysium-prompt-suggest-guidelines
-    :e_example relysium-prompt-suggest-example)))
+(defun relysium-prompt-suggest-system (using-region)
+  "Build the system prompt for suggest command.
+If USING-REGION is non-nil, include region-specific instructions."
+  (let ((components (list
+                     :a_intro relysium-prompt-suggest-base
+                     :b_analysis relysium-prompt-suggest-contextual-analysis
+                     :c_format relysium-prompt-suggest-format
+                     :d_guidelines relysium-prompt-suggest-guidelines)))
+
+    ;; Add region-specific guidelines if working with a region
+    (when using-region
+      (setq components (plist-put components :d2_region_guidelines
+                                  relysium-prompt-suggest-region-guidelines)))
+
+    ;; Always add the example at the end
+    (setq components (plist-put components :e_example relysium-prompt-suggest-example))
+
+    (relysium-build-prompt components)))
 
 
 (defvar relysium-prompt-suggest-user-template
@@ -142,22 +161,77 @@ ${source-code}
 Task: ${user-query}
 ")
 
+(defvar relysium-prompt-suggest-region-template
+  "File type: ${language-name}
+
+Selected region (lines ${start-line} to ${end-line}):
+${source-code}
+
+Task: ${user-query}
+")
+
 ;;;###autoload
 (defun relysium-suggest (user-query)
-  "Send whole buffer to LLM for code improvement suggestions."
+  "Send code to LLM for improvement suggestions.
+When a region is active, only that region will be analyzed.
+Otherwise, the whole buffer will be analyzed.
+USER-QUERY specifies the type of improvements to suggest."
   (interactive "sInstruction: ")
 
   (let* ((context (relysium-context-gather))
-         (system-prompt (relysium-prompt-suggest-system))
-         (user-prompt (relysium-render-template relysium-prompt-suggest-user-template (append context '(:user-query user-query
+         (using-region (plist-get context :using-region))
+         (system-prompt (relysium-prompt-suggest-system using-region))
+         (template (if using-region
+                       relysium-prompt-suggest-region-template
+                     relysium-prompt-suggest-user-template))
+         (code-to-format (if using-region
+                             (plist-get context :selected-code)
+                           (plist-get context :buffer-content)))
+         (formatted-code (relysium-format-with-line-numbers
+                          code-to-format
+                          (if using-region (plist-get context :start-line) 1)))
+         (user-prompt (relysium-render-template
+                       template
+                       (plist-put (plist-put context :user-query user-query)
+                                  :source-code formatted-code))))
 
-                                                                                                                    :source-code (relysium-format-with-line-numbers (plist-get context :buffer-content)))))))
-
+    ;; Store the current context in the request for later use
     (relysium-core-request
      (list :context context
            :system-prompt system-prompt
            :user-prompt user-prompt
-           :response-handler #'relysium-core-process-suggestions))))
+           :response-handler #'relysium-core-process-suggestions
+           :retry-fn #'relysium-retry-suggest-query))))
+
+(defun relysium-retry-suggest-query ()
+  "Retry the suggest query with modifications."
+  (interactive)
+  (let ((new-query (read-string "Modify suggestion request: " relysium--last-query)))
+    (when new-query
+      (with-current-buffer relysium--last-code-buffer
+        ;; Discard current suggestions
+        (relysium-discard-all-changes)
+
+        ;; Restore the region if a region was previously used
+        (let ((chat-buffer (relysium-buffer-get-chat-buffer)))
+          (when (buffer-local-value 'relysium--using-region chat-buffer)
+            (let* ((point-min (point-min))
+                   (start-line (buffer-local-value 'relysium--region-start-line chat-buffer))
+                   (end-line (buffer-local-value 'relysium--region-end-line chat-buffer))
+                   start-pos end-pos)
+              ;; Set point to start line
+              (setq start-pos (goto-char point-min))
+              (forward-line (1- start-line))
+              (setq start-pos (point))
+              ;; Set mark to end line
+              (goto-char point-min)
+              (forward-line (1- end-line))
+              (end-of-line)
+              (setq end-pos (point))
+              (set-mark start-pos))))
+
+        ;; Execute the new query
+        (relysium-suggest new-query)))))
 
 (provide 'relysium-suggest)
 ;;; relysium-suggest.el ends here
