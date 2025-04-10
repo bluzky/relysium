@@ -11,6 +11,7 @@
 (require 'relysium-core)
 (require 'relysium-context)
 (require 'relysium-commands)
+(require 'relysium-prompt-template)
 
 
 ;; Base prompt components
@@ -30,48 +31,67 @@ Follow these instructions precisely:")
    - Generate code appropriate for the context
    - Take into account the surrounding code and scope
 5. The generated code must be syntactically valid and follow the conventions of the language
-6. The code SHOULD replace the 'AI:' comment line
-7. Maintain the same indentation and coding style as the surrounding code")
-
-(defvar relysium-prompt-generate-format
-  "Response format rules:
-- Return each suggestion in XML format using <suggestion> tags with these attributes:
-  - start_row: The starting row where the code should be inserted (starting from 1, inclusive)
-  - end_row: The ending row where the code should be inserted (starting from 1, inclusive)
-  - action: Either 'insert' or 'replace'
-- For insert action, use start_row=end_row (insert at the beginning of the specified line)
-- For replace action: if replacing lines 10-12, use start_row=10, end_row=12
-- Each suggestion should look like this:
-  <suggestion start_row=\"10\" end_row=\"10\" action=\"insert\">
-  // Generated code here
-  </suggestion>
-- DO NOT include explanations outside the suggestion tags
-- REPLACE the original 'AI:' comments")
+6. The code suggestion MUST REPLACE the 'AI:' comment line
+7. Maintain the same indentation and coding style as the surrounding code.
+8. The suggestion must seamlessly integrate into the existing code without breaking it syntax and semantics")
 
 (defvar relysium-prompt-generate-example
   "Example:
 
 Given source code with line numbers:
-1: function calculateTotal(items) {
-2:   let total = 0;
-3:   // AI: Calculate sum of all item prices
+1: def process_data(items):
+2:     results = []
+3:     # AI: Initialize total and processed counters
 4:
-5:   // AI: Apply tax if total > 100
-6:
-7:   return total;
-8: }
+5:     # AI: Optimize this loop to use enumerate
+6:     for i in range(len(items)):
+7:
+8:         item = items[i]
+9:         # AI: Skip items with status='invalid'
+10:
+11:        # AI: Calculate score based on value*weight
+12:
+13:        # AI: Add to results if score > 75
+14:
+15:     # AI: Return results with summary stats
+16:     return results
 
 Your response should be:
-<suggestion start_row=\"3\" end_row=\"4\" action=\"replace\">
-  for (const item of items) {
-    total += item.price;
-  }
+<suggestion start_row=\"3\" end_row=\"3\" action=\"replace\">
+    total = 0
+    processed = 0
 </suggestion>
 
-<suggestion start_row=\"5\" end_row=\"6\" action=\"replace\">
-  if (total > 100) {
-    total *= 1.08; // Apply 8% tax
-  }
+<suggestion start_row=\"5\" end_row=\"8\" action=\"replace\">
+    for i, item in enumerate(items):
+</suggestion>
+
+<suggestion start_row=\"9\" end_row=\"9\" action=\"replace\">
+        if item.get('status') == 'invalid':
+            continue
+        processed += 1
+</suggestion>
+
+<suggestion start_row=\"11\" end_row=\"11\" action=\"replace\">
+        score = item.get('value', 0) * item.get('weight', 1)
+        total += score
+</suggestion>
+
+<suggestion start_row=\"13\" end_row=\"13\" action=\"replace\">
+        if score > 75:
+            results.append({
+                'id': item.get('id'),
+                'score': score
+            })
+</suggestion>
+
+<suggestion start_row=\"15\" end_row=\"15\" action=\"replace\">
+    return {
+        'results': results,
+        'total_score': total,
+        'processed': processed,
+        'count': len(results)
+    }
 </suggestion>")
 
 ;; Function to build the system prompt
@@ -81,7 +101,7 @@ Your response should be:
    (list
     :a_intro relysium-prompt-generate-base
     :b_guidelines relysium-prompt-generate-guidelines
-    :c_format relysium-prompt-generate-format
+    :c_format relysium-prompt-template-multi-suggestion-format
     :d_example relysium-prompt-generate-example)))
 
 ;; Function to build the user prompt
@@ -108,7 +128,7 @@ Your response should be:
                              ""))
       :b_code (format "Source code with line numbers:\n%s"
                       (relysium-format-code-block lang-name annotated-code))
-      :c_task (format "Please analyze the code and look for comments that start with 'AI:'.\nGenerate code suggestions to fulfill the tasks described in these comments.\nThe suggestions should REPLACE each 'AI:' comment line.")))))
+      :c_task (format "Please analyze the code and look for comments that start with 'AI:'.\nGenerate code suggestions to fulfill the tasks described in these comments.")))))
 
 ;;;###autoload
 (defun relysium-generate-from-comments ()

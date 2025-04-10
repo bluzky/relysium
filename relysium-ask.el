@@ -40,11 +40,14 @@ Question: ${user-query}")
            (system-prompt relysium-prompt-ask-system)
            (user-prompt-text (relysium-render-template relysium-prompt-ask-user (plist-put context :user-query question))
                              ))
+      ;; Update chat buffer with the query
+      (relysium-buffer-append-user-message user-prompt-text)
 
       (relysium-core-request
        (list :context context
              :system-prompt system-prompt
-             :user-prompt user-prompt-text))
+             :user-prompt user-prompt-text
+             :response-handler #'relysium-core-process-chat-block))
       (relysium-buffer-setup-windows t)
       )))
 

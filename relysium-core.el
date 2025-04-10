@@ -42,9 +42,6 @@ This handler:
     ;; Log the full response if debug mode is enabled
     (relysium-debug-log "LLM Response:\n%s" response)
 
-    ;; Add response to the chat buffer
-    (relysium-buffer-append-assistant-message response)
-
     ;; Call the specific handler if provided
     (when-let ((specific-handler (plist-get info :specific-handler)))
       (funcall specific-handler code-buffer response info))
@@ -57,6 +54,11 @@ This handler:
     (when-let ((post-callback (plist-get info :post-callback)))
       (funcall post-callback code-buffer response info))))
 
+(defun relysium-core-process-chat-block (_code-buffer response _info)
+  "Process a code block response."
+  (relysium-buffer-append-assistant-message response)
+  )
+
 ;; Built-in response processors for different response types
 (defun relysium-core-process-code-block (code-buffer response info)
   "Process a code block response.
@@ -66,13 +68,6 @@ INFO is additional data."
   ;; Extract code block from response
   (let ((code-block (relysium-extraction-code-block response))
         (chat-buffer (plist-get info :buffer)))
-
-    ;; Log the extracted code if debug mode is enabled
-    (relysium-debug-log "Extracted code: %s"
-                        (if code-block
-                            (format "%s" code-block)
-                          "None found"))
-
     ;; Apply the code if it was extracted
     (if code-block
         (with-current-buffer code-buffer
@@ -173,9 +168,6 @@ OPTIONS is a plist that can include:
     ;; Log debug information
     (relysium-debug-log "System Prompt:\n%s" system-prompt)
     (relysium-debug-log "User Prompt:\n%s" user-prompt)
-
-    ;; Update chat buffer with the query
-    (relysium-buffer-append-user-message user-prompt)
 
     ;; Update status and send request
     (with-current-buffer chat-buffer

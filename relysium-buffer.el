@@ -146,11 +146,11 @@ If BUFFER is non-nil, use it; otherwise, use the shared chat buffer."
     (with-current-buffer chat-buffer
       (goto-char (point-max))
       (unless (bolp) (insert "\n"))
-      (insert "\n### USER:\n")
       (insert message)
       (insert "\n"))))
 
 ;;;###autoload
+;; AI: update docstring with more details
 (defun relysium-buffer-append-assistant-message (message &optional buffer)
   "Append assistant MESSAGE to the chat buffer.
 If BUFFER is non-nil, use it; otherwise, use the shared chat buffer."
@@ -158,9 +158,10 @@ If BUFFER is non-nil, use it; otherwise, use the shared chat buffer."
     (with-current-buffer chat-buffer
       (goto-char (point-max))
       (unless (bolp) (insert "\n"))
-      (insert "\n### ASSISTANT:\n")
+      ;; AI: optimize following insert actions
+      (insert "\n### 🤖 ASSISTANT:\n")
       (insert message)
-      (insert "\n\n### "))))
+      (insert "\n\n--- \n### 🎙️ USER: "))))
 
 (provide 'relysium-buffer)
 ;;; relysium-buffer.el ends here

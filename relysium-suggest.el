@@ -12,6 +12,7 @@
 (require 'relysium-core)
 (require 'relysium-context)
 (require 'relysium-commands)
+(require 'relysium-prompt-template)
 
 ;; Common components that could be shared across commands
 (defvar relysium-prompt-suggest-base
@@ -27,40 +28,21 @@ Focus on:
 Your suggestions should respect and enhance existing code structure, naming conventions, and design decisions unless they are clearly problematic.
 Never suggest changes that would alter the core functionality unless explicitly requested.")
 
-(defvar relysium-prompt-suggest-format
-  "Response format rules:
-   - Return each suggestion in XML format using <suggestion> tags with the following attributes:
-     - start_row: The starting row of the original code snippet to replace (starting from 1, inclusive)
-     - end_row: The ending row of the original code snippet to replace (starting from 1, inclusive)
-     - action: Either 'insert' or 'replace'
-     - reason: (optional) Brief explanation of why this change is suggested
-   - For insert action use start_row=end_row
-   - For replace action: if modifying lines 10-12, use start_row=10, end_row=12
-   - IMPORTANT: If a suggestion would change the same line(s) as another suggestion, combine them into one suggestion instead of creating overlapping ranges
-   - Example of invalid overlapping suggestions: One suggesting changing line 5, another suggesting changing lines 5-7
-   - Sort all suggestions by start_row in ascending order (from top to bottom of the file)")
-
 ;; Suggest-specific components
-(defvar relysium-prompt-suggest-guidelines
-  "Code suggestion requirements:
+(setq relysium-prompt-suggest-guidelines
+      "CODE SUGGESTION REQUIREMENTS:
    - CRITICAL: Preserve original indentation and whitespace style precisely
    - CRITICAL: Return suggestions in ascending order by start_row (lowest to highest line numbers)
    - CRITICAL: Suggestion line ranges MUST NOT overlap with each other
+   - CRITICAL: Use absolute line numbers in the file, not relative to the selection, DO NOT skip empty lines
    - Each suggestion must be applicable independently
    - Analyze the full context before making suggestions
    - Prioritize changes that have the highest impact on code quality
-   - Each suggestion should look like this:
-     <suggestion start_row=\"1\" end_row=\"1\" action=\"insert\" reason=\"Adds documentation\">
-     new code to be inserted
-     </suggestion>
-   - DO NOT include explanations or comments outside the suggestion tags
    - Only return the new code to be inserted or replaced
    - Each suggestion is a COMPLETE code snippet that can directly replace the original
-   - Combine related changes into one suggestion when logical
    - For function or class suggestions, include the entire definition
    - If two potential suggestions would overlap, choose the more important one or split them into non-overlapping changes
-   - Respect existing naming conventions, even if you would personally use different ones
-   - Consider linter rules that might be in effect based on codebase style")
+   - Respect existing naming conventions, even if you would personally use different ones")
 
 (defvar relysium-prompt-suggest-example
   "Example:
@@ -73,11 +55,10 @@ Source code with line numbers:
 5:     return total
 
 User request:
-Improve this code with type hints and better error handling
+Improve this code with document, type hint and better error handling
 
 Your response: (Important: Suggestions should be sorted by start_row and MUST NOT overlap)
-<suggestion start_row=\"1\" end_row=\"1\" action=\"replace\" reason=\"Add type hints and docstring\">
-def calculate_total(items: list[float]) -> float:
+<suggestion start_row=\"1\" end_row=\"1\" action=\"insert\" reason=\"Add docstring\">
     \"\"\"Calculate the sum of all items in the list.
 
     Args:
@@ -138,7 +119,7 @@ If USING-REGION is non-nil, include region-specific instructions."
   (let ((components (list
                      :a_intro relysium-prompt-suggest-base
                      :b_analysis relysium-prompt-suggest-contextual-analysis
-                     :c_format relysium-prompt-suggest-format
+                     :c_format relysium-prompt-template-multi-suggestion-format
                      :d_guidelines relysium-prompt-suggest-guidelines)))
 
     ;; Add region-specific guidelines if working with a region
@@ -156,16 +137,20 @@ If USING-REGION is non-nil, include region-specific instructions."
   "File type: ${language-name}
 
 Source code:
+
+```${language-name}
 ${source-code}
+```
 
 Task: ${user-query}
 ")
 
 (defvar relysium-prompt-suggest-region-template
-  "File type: ${language-name}
+  "Selected region (lines: ${start-line} - ${end-line}):
 
-Selected region (lines ${start-line} to ${end-line}):
+```${language-name}
 ${source-code}
+```
 
 Task: ${user-query}
 ")
