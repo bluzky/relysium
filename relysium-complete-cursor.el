@@ -1,121 +1,130 @@
-;;; relysium-complete-cursor.el --- Auto-complete at cursor position -*- lexical-binding: t; -*-
+;;; relysium-complete-cursor.el --- Prompts for code completion -*- lexical-binding: t; -*-
 
 ;;; Commentary:
 ;;
-;; This file contains the functions for auto-completing code at the current
-;; cursor position, using the context of the entire buffer to understand what
-;; code should be generated.
+;; This file contains the prompt components and builders for the code completion
+;; at point functionality.
 
 ;;; Code:
-
-(require 'gptel)
-(require 'relysium-context)
-(require 'relysium-buffer)
-(require 'relysium-extraction)
-(require 'relysium-patch)
 (require 'relysium-utils)
+(require 'relysium-core)
+(require 'relysium-context)
 (require 'relysium-commands)
-(require 'relysium-prompt-complete-cursor)
 
-;; Forward declaration for the compiler
-(declare-function relysium-retry-query "relysium-edit.el")
+;; Base prompt components
+(defvar relysium-prompt-complete-cursor-base
+  "Act as an expert software developer specializing in the current language.
+Your task is to generate code that would complete or extend the functionality at the cursor position in the provided code. Follow these instructions precisely:")
+
+(defvar relysium-prompt-complete-cursor-guidelines
+  "1. Analyze the code context thoroughly to understand what the user is trying to accomplish.
+2. If the cursor is inside a function, generate code that completes that function's logic.
+3. If the cursor is outside any function, generate appropriate code based on the user's task description.
+4. The generated code MUST be syntactically valid and match the style of the surrounding code.
+5. Maintain consistent naming conventions, indentation style, and comment style.")
+
+(defvar relysium-prompt-complete-cursor-format
+  "Response format rules:
+- Return ONLY the code to be inserted, nothing else.
+- Wrap your code in <code></code> tags.
+- Place your <code> tag on its own line.
+- Place the closing </code> tag on its own line after your code.
+- Do NOT include explanations or commentary outside the code tags.
+- The code will REPLACE the current line at the cursor position.
+- Ensure your response maintains proper indentation relative to the surrounding code.
+- If you need to generate a multi-line solution, ensure all lines have correct indentation.")
+
+(defvar relysium-prompt-complete-cursor-example
+  "Here's an example interaction:
+
+USER:
+File type: python
+Cursor line: 12
+
+Full source code:
+```python
+def calculate_total_price(items, discount_rate=0):
+    \"\"\"
+    Calculate the total price of items with an optional discount rate.
+
+    Args:
+        items: List of dictionaries with 'price' and 'quantity' keys
+        discount_rate: Float between 0 and 1 representing discount percentage
+
+    Returns:
+        float: Total price after discount
+    \"\"\"
+    total = 0
+
+    # Calculate total here
+
+    # Apply discount
+    final_price = total * (1 - discount_rate)
+    return final_price
+```
+
+The cursor is positioned at line 12: # Calculate total here
+
+Task: Complete the calculation of the total price by adding up the price * quantity for each item
+
+ASSISTANT:
+<code>
+    for item in items:
+        total += item['price'] * item['quantity']
+</code>
+")
+
+;; Function to build the system prompt
+(defun relysium-prompt-complete-cursor-system ()
+  "Build the system prompt for code completion at point."
+  (relysium-build-prompt
+   (list
+    :a_intro relysium-prompt-complete-cursor-base
+    :b_guidelines relysium-prompt-complete-cursor-guidelines
+    :c_format relysium-prompt-complete-cursor-format
+    :d_example relysium-prompt-complete-cursor-example
+    )))
+
+;; Function to build the user prompt
+(defun relysium-prompt-complete-cursor-user (context user-query)
+  "Build the user prompt for code completion with CONTEXT and USER-QUERY."
+  (let* ((lang-name (plist-get context :language-name))
+         (cursor-line (plist-get context :cursor-line))
+         (buffer-content (plist-get context :buffer-content))
+         (cursor-line-content (save-excursion
+                                (goto-char (point-min))
+                                (forward-line (1- cursor-line))
+                                (buffer-substring-no-properties
+                                 (line-beginning-position)
+                                 (line-end-position)))))
+
+    (relysium-build-prompt
+     (list
+      :a_file_info (format "File type: %s\nCursor line: %d" lang-name cursor-line)
+      :b_code (format "Full source code:\n%s"
+                      (relysium-format-code-block lang-name buffer-content))
+      :c_cursor_pos (format "The cursor is positioned at line %d: %s"
+                            cursor-line cursor-line-content)
+      :d_task (format "Task: %s" user-query)
+      ))))
 
 ;;;###autoload
 (defun relysium-complete-cursor (user-query)
-  "Generate code at the current cursor position based on USER-QUERY.
-Uses the entire buffer context to understand the task, with a focus on the
-cursor line and its surroundings."
+  "Generate code at the current cursor position based on USER-QUERY."
   (interactive "sTask description: ")
 
-  (let* ((code-buffer (current-buffer))
-         (chat-buffer (relysium-buffer-get-chat-buffer))
-         ;; Get context from the entire buffer
-         (full-context (relysium-context-gather))
-         ;; Extract relevant positions
-         (cursor-pos (plist-get full-context :cursor-pos))
-         (cursor-line (plist-get full-context :cursor-line))
-         ;; Prepare prompt components
+  (let* ((context (relysium-context-gather))
          (system-prompt (relysium-prompt-complete-cursor-system))
-         (user-prompt (relysium-prompt-complete-cursor-user full-context user-query)))
+         (user-prompt (relysium-prompt-complete-cursor-user context "")))
 
-    ;; Store for later use
-    (setq relysium--last-query user-query)
-    (setq relysium--last-code-buffer code-buffer)
+    (relysium-core-request
+     (list :user-query user-query
+           :context context
+           :system-prompt system-prompt
+           :user-prompt user-prompt
+           :response-handler #'relysium-core-process-code-block
+           :retry-fn #'relysium-retry-completion))))
 
-    ;; Store context locally in the chat buffer
-    (with-current-buffer chat-buffer
-      (setq-local relysium--cursor-line (plist-get full-context :cursor-line)))
-
-    ;; Update chat buffer with the query
-    (relysium-buffer-append-user-message user-prompt)
-
-    ;; Update status and send request
-    (with-current-buffer chat-buffer
-      (gptel--sanitize-model)
-      (gptel--update-status " Waiting..." 'warning))
-
-    (message "Requesting code completion at line %d..." cursor-line)
-
-    (gptel-request user-prompt
-      :system system-prompt
-      :buffer chat-buffer
-      :callback (apply-partially #'relysium-complete-cursor-callback code-buffer))))
-
-(defun relysium-complete-cursor-callback (code-buffer response info)
-  "Handle the RESPONSE from LLM for code completion.
-Apply the generated code to CODE-BUFFER at the cursor position.
-INFO is passed from the `gptel-request` function."
-  (when response
-    ;; Log the full response if debug mode is enabled
-    (relysium-debug-log "LLM Completion Response:\n%s" response)
-
-    ;; Add response to the chat buffer
-    (relysium-buffer-append-assistant-message response)
-
-    ;; Extract code block from response
-    (let ((code-block (relysium-extraction-code-block response))
-          (chat-buffer (plist-get info :buffer)))
-
-      ;; Log the extracted code if debug mode is enabled
-      (relysium-debug-log "Extracted code completion: %s"
-                          (if code-block
-                              (format "%s" code-block)
-                            "None found"))
-
-      ;; Apply the completion if code was extracted
-      (if code-block
-          (with-current-buffer code-buffer
-            ;; Mark undo boundary
-            (undo-boundary)
-
-            ;; Get the cursor line from chat buffer's local variables
-            (let* ((cursor-line (buffer-local-value 'relysium--cursor-line chat-buffer))
-                   ;; Create change plist
-                   (change (list :action 'replace
-                                 :start cursor-line
-                                 :end (1+ cursor-line)  ;; Exclusive range
-                                 :code code-block)))
-
-              ;; Apply using shared patch utilities
-              (relysium-patch-apply code-buffer (list change))
-
-              ;; Activate smerge mode and show transient menu
-              (smerge-mode 1)
-              (goto-char (point-min))
-              (ignore-errors (smerge-next))
-              ;; Set the retry query function for the transient menu
-              (setq relysium-retry-query 'relysium-retry-completion)
-              (relysium-transient-menu)
-              (message "Code completion applied. Review with the merge menu.")))
-        (message "No applicable code completion found."))
-
-      ;; Update status
-      (with-current-buffer chat-buffer
-        (gptel--update-status " Ready" 'success))
-      )
-    ))
-
-;; Function to retry the completion with a modified query
 (defun relysium-retry-completion ()
   "Retry the code completion with a modified query."
   (interactive)
@@ -127,11 +136,6 @@ INFO is passed from the `gptel-request` function."
 
         ;; Execute the new query
         (relysium-complete-cursor new-query)))))
-
-;; Forward declaration for the compiler
-(defvar relysium-retry-query)
-
-;; The retry function is dynamically assigned later in the callback
 
 (provide 'relysium-complete-cursor)
 ;;; relysium-complete-cursor.el ends here

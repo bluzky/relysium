@@ -76,7 +76,6 @@ Provides keybindings and integration for elysium code assistance."
             (define-key map (kbd "C-c e d") 'relysium-debug-log)
             (define-key map (kbd "C-c e m") 'relysium-transient-menu)
             (define-key map (kbd "C-c e s") 'relysium-suggest)
-            (define-key map (kbd "C-c e p") 'relysium-complete-at-point)
             (define-key map (kbd "C-c e w") 'relysium-buffer-switch-to-chat)
             (define-key map (kbd "C-c e g") 'relysium-generate-from-comments)
             map))

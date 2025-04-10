@@ -1,93 +1,222 @@
-;;; relysium-suggest.el --- Suggestions functionality for relysium -*- lexical-binding: t; -*-
+;;; relysium-suggest.el --- Suggest prompts for relysium -*- lexical-binding: t; -*-
 
 ;;; Commentary:
 ;;
-;; This file contains the functions related to getting and applying AI-generated
-;; code suggestions to the current buffer using the relysium package.
+;; This file contains the prompt components and builders for the suggest command.
+;; The suggest command analyzes code and provides targeted improvements.
+;; It can work on either the entire buffer or just a selected region.
 
 ;;; Code:
 
-(require 'gptel)
-(require 'relysium-context)
-(require 'relysium-prompt-suggest)
-(require 'relysium-buffer)
-(require 'relysium-extraction)
-(require 'relysium-patch)
-(require 'relysium-commands)
 (require 'relysium-utils)
+(require 'relysium-core)
+(require 'relysium-context)
+(require 'relysium-commands)
+(require 'relysium-prompt-template)
+
+;; Common components that could be shared across commands
+(defvar relysium-prompt-suggest-base
+  "Act as an expert software developer with deep knowledge of software design patterns, best practices, and the specific language I'm working in.
+Be precise, thoughtful, and comprehensive in your assessment of code.
+Focus on:
+1. Code quality improvements (readability, maintainability)
+2. Performance optimizations
+3. Bug prevention and edge case handling
+4. Modern patterns and idioms in the language
+5. Documentation and clarity enhancements
+
+Your suggestions should respect and enhance existing code structure, naming conventions, and design decisions unless they are clearly problematic.
+Never suggest changes that would alter the core functionality unless explicitly requested.")
+
+;; Suggest-specific components
+(setq relysium-prompt-suggest-guidelines
+      "CODE SUGGESTION REQUIREMENTS:
+   - CRITICAL: Preserve original indentation and whitespace style precisely
+   - CRITICAL: Return suggestions in ascending order by start_row (lowest to highest line numbers)
+   - CRITICAL: Suggestion line ranges MUST NOT overlap with each other
+   - CRITICAL: Use absolute line numbers in the file, not relative to the selection, DO NOT skip empty lines
+   - Each suggestion must be applicable independently
+   - Analyze the full context before making suggestions
+   - Prioritize changes that have the highest impact on code quality
+   - Only return the new code to be inserted or replaced
+   - Each suggestion is a COMPLETE code snippet that can directly replace the original
+   - For function or class suggestions, include the entire definition
+   - If two potential suggestions would overlap, choose the more important one or split them into non-overlapping changes
+   - Respect existing naming conventions, even if you would personally use different ones")
+
+(defvar relysium-prompt-suggest-example
+  "Example:
+
+Source code with line numbers:
+1: def calculate_total(items):
+2:     total = 0
+3:     for item in items:
+4:         total += item
+5:     return total
+
+User request:
+Improve this code with document, type hint and better error handling
+
+Your response: (Important: Suggestions should be sorted by start_row and MUST NOT overlap)
+<suggestion start_row=\"1\" end_row=\"1\" action=\"insert\" reason=\"Add docstring\">
+    \"\"\"Calculate the sum of all items in the list.
+
+    Args:
+        items: A list of numbers to sum
+
+    Returns:
+        The total sum of all items
+    \"\"\"
+</suggestion>
+
+<suggestion start_row=\"2\" end_row=\"2\" action=\"replace\" reason=\"Initialize with correct type\">
+    total: float = 0.0
+</suggestion>
+
+<suggestion start_row=\"3\" end_row=\"5\" action=\"replace\" reason=\"Add error handling for non-numeric items\">
+    for item in items:
+        try:
+            total += float(item)
+        except (TypeError, ValueError):
+            raise TypeError(f\"Expected numeric value, got {type(item).__name__}\")
+    return total
+</suggestion>")
+
+(defvar relysium-prompt-suggest-contextual-analysis
+  "Code Analysis Process:
+   1. First examine the code thoroughly, looking for:
+      - Unclear or missing documentation
+      - Potentially buggy code patterns
+      - Inefficient implementations
+      - Inconsistent styling
+      - Missing error handling
+      - Code duplications or repetitions
+      - Opportunities for better abstractions
+   2. Then consider the user's specific request, prioritizing those aspects
+   3. For each potential improvement, consider:
+      - The actual value added vs. complexity introduced
+      - How the change fits with surrounding code style
+      - The risk of introducing bugs or changing behavior
+   4. Ensure suggested changes don't create overlapping line ranges
+   5. Arrange suggestions in ascending order by line number
+   6. Finally, suggest only the changes that would provide clear improvements
+
+   Remember that smaller, targeted suggestions are often more useful than complete rewrites.")
+
+;; Add region specific instructions
+(defvar relysium-prompt-suggest-region-guidelines
+  "Region-specific instructions:
+   - You are analyzing a selected region of a larger file
+   - Focus your suggestions ONLY on the code within the provided line range
+   - All suggestions MUST be within the bounds of the selection (from start_line to end_line inclusive)
+   - Be aware that the selected region may be a partial function or class definition
+   - The line numbers in your suggestions should match the absolute line numbers in the file")
+
+;; System prompt builder for suggest command
+(defun relysium-prompt-suggest-system (using-region)
+  "Build the system prompt for suggest command.
+If USING-REGION is non-nil, include region-specific instructions."
+  (let ((components (list
+                     :a_intro relysium-prompt-suggest-base
+                     :b_analysis relysium-prompt-suggest-contextual-analysis
+                     :c_format relysium-prompt-template-multi-suggestion-format
+                     :d_guidelines relysium-prompt-suggest-guidelines)))
+
+    ;; Add region-specific guidelines if working with a region
+    (when using-region
+      (setq components (plist-put components :d2_region_guidelines
+                                  relysium-prompt-suggest-region-guidelines)))
+
+    ;; Always add the example at the end
+    (setq components (plist-put components :e_example relysium-prompt-suggest-example))
+
+    (relysium-build-prompt components)))
+
+
+(defvar relysium-prompt-suggest-user-template
+  "File type: ${language-name}
+
+Source code:
+
+```${language-name}
+${source-code}
+```
+
+Task: ${user-query}
+")
+
+(defvar relysium-prompt-suggest-region-template
+  "Selected region (lines: ${start-line} - ${end-line}):
+
+```${language-name}
+${source-code}
+```
+
+Task: ${user-query}
+")
 
 ;;;###autoload
-(defun relysium-suggest (additional-prompt)
-  "Send whole buffer to LLM for code improvement suggestions.
-The LLM will return suggestions in XML format that will be applied to the buffer.
-ADDITIONAL-PROMPT allows users to provide specific instructions."
+(defun relysium-suggest (user-query)
+  "Send code to LLM for improvement suggestions.
+When a region is active, only that region will be analyzed.
+Otherwise, the whole buffer will be analyzed.
+USER-QUERY specifies the type of improvements to suggest."
   (interactive "sInstruction: ")
 
-  (let* ((code-buffer (current-buffer))
-         (chat-buffer (relysium-buffer-get-chat-buffer))
-         ;; Get context for the whole buffer
-         (context (relysium-context-gather))
-         ;; Build prompts using our specialized builders
-         (system-prompt (relysium-prompt-suggest-system))
-         (user-prompt (relysium-prompt-suggest-user context additional-prompt)))
+  (let* ((context (relysium-context-gather))
+         (using-region (plist-get context :using-region))
+         (system-prompt (relysium-prompt-suggest-system using-region))
+         (template (if using-region
+                       relysium-prompt-suggest-region-template
+                     relysium-prompt-suggest-user-template))
+         (code-to-format (if using-region
+                             (plist-get context :selected-code)
+                           (plist-get context :buffer-content)))
+         (formatted-code (relysium-format-with-line-numbers
+                          code-to-format
+                          (if using-region (plist-get context :start-line) 1)))
+         (user-prompt (relysium-render-template
+                       template
+                       (plist-put (plist-put context :user-query user-query)
+                                  :source-code formatted-code))))
 
-    ;; Update chat buffer with the query
-    (relysium-buffer-append-user-message user-prompt)
-    (relysium-debug-log "System prompt: %s" system-prompt)
-    (relysium-debug-log "Context: %s" context)
-    (relysium-debug-log "User prompt: %s" user-prompt)
+    ;; Store the current context in the request for later use
+    (relysium-core-request
+     (list :context context
+           :system-prompt system-prompt
+           :user-prompt user-prompt
+           :response-handler #'relysium-core-process-suggestions
+           :retry-fn #'relysium-retry-suggest-query))))
 
-    ;; Update status and send request
-    (with-current-buffer chat-buffer
-      (gptel--sanitize-model)
-      (gptel--update-status " Waiting..." 'warning))
+(defun relysium-retry-suggest-query ()
+  "Retry the suggest query with modifications."
+  (interactive)
+  (let ((new-query (read-string "Modify suggestion request: " relysium--last-query)))
+    (when new-query
+      (with-current-buffer relysium--last-code-buffer
+        ;; Discard current suggestions
+        (relysium-discard-all-changes)
 
-    (message "Requesting code suggestions from %s..." (gptel-backend-name gptel-backend))
+        ;; Restore the region if a region was previously used
+        (let ((chat-buffer (relysium-buffer-get-chat-buffer)))
+          (when (buffer-local-value 'relysium--using-region chat-buffer)
+            (let* ((point-min (point-min))
+                   (start-line (buffer-local-value 'relysium--region-start-line chat-buffer))
+                   (end-line (buffer-local-value 'relysium--region-end-line chat-buffer))
+                   start-pos end-pos)
+              ;; Set point to start line
+              (setq start-pos (goto-char point-min))
+              (forward-line (1- start-line))
+              (setq start-pos (point))
+              ;; Set mark to end line
+              (goto-char point-min)
+              (forward-line (1- end-line))
+              (end-of-line)
+              (setq end-pos (point))
+              (set-mark start-pos))))
 
-    (gptel-request user-prompt
-      :system system-prompt
-      :buffer chat-buffer
-      :callback (apply-partially #'relysium-handle-suggestions code-buffer))))
-
-(defun relysium-handle-suggestions (code-buffer response info)
-  "Handle the XML suggestions RESPONSE from gptel.
-The suggestions will be applied to CODE-BUFFER.
-INFO is passed from the `gptel-request' function."
-  (when response
-    ;; Log the full response if debug mode is enabled
-    (relysium-debug-log "LLM Suggestion Response:\n%s" response)
-
-    ;; Add response to the chat buffer
-    (relysium-buffer-append-assistant-message response)
-
-    ;; Extract suggestions using shared extraction module
-    (let ((suggestions (relysium-extraction-suggestions response)))
-      ;; Log the extracted suggestions if debug mode is enabled
-      (relysium-debug-log "Extracted suggestions: %s"
-                          (if suggestions
-                              (format "%s" suggestions)
-                            "None found"))
-
-      (if suggestions
-          (with-current-buffer code-buffer
-            ;; Mark undo boundary before making changes
-            (undo-boundary)
-
-            ;; Apply the changes using shared patch module
-            (relysium-patch-apply code-buffer suggestions)
-
-            ;; Activate smerge mode and show transient menu
-            (smerge-mode 1)
-            (goto-char (point-min))
-            (ignore-errors (smerge-next))
-            (relysium-transient-menu)
-            (message "Applied %d suggestion(s). Review with the merge menu." (length suggestions)))
-        (message "No applicable suggestions found.")))
-
-    ;; Update status
-    (let ((chat-buffer (plist-get info :buffer)))
-      (with-current-buffer chat-buffer
-        (gptel--update-status " Ready" 'success)))))
+        ;; Execute the new query
+        (relysium-suggest new-query)))))
 
 (provide 'relysium-suggest)
 ;;; relysium-suggest.el ends here
