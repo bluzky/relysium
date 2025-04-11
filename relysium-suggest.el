@@ -5,6 +5,7 @@
 ;; This file contains the prompt components and builders for the suggest command.
 ;; The suggest command analyzes code and provides targeted improvements.
 ;; It can work on either the entire buffer or just a selected region.
+;; Updated to use simple-template.el for template rendering.
 
 ;;; Code:
 
@@ -13,9 +14,10 @@
 (require 'relysium-context)
 (require 'relysium-commands)
 (require 'relysium-prompt-template)
+(require 'simple-template)
 
 ;; Common components that could be shared across commands
-(defvar relysium-prompt-suggest-base
+(defvar relysium-prompt-suggest-system
   "Act as an expert software developer with deep knowledge of software design patterns, best practices, and the specific language I'm working in.
 Be precise, thoughtful, and comprehensive in your assessment of code.
 Focus on:
@@ -26,11 +28,31 @@ Focus on:
 5. Documentation and clarity enhancements
 
 Your suggestions should respect and enhance existing code structure, naming conventions, and design decisions unless they are clearly problematic.
-Never suggest changes that would alter the core functionality unless explicitly requested.")
+Never suggest changes that would alter the core functionality unless explicitly requested.
 
-;; Suggest-specific components
-(setq relysium-prompt-suggest-guidelines
-      "CODE SUGGESTION REQUIREMENTS:
+Code Analysis Process:
+   1. First examine the code thoroughly, looking for:
+      - Unclear or missing documentation
+      - Potentially buggy code patterns
+      - Inefficient implementations
+      - Inconsistent styling
+      - Missing error handling
+      - Code duplications or repetitions
+      - Opportunities for better abstractions
+   2. Then consider the user's specific request, prioritizing those aspects
+   3. For each potential improvement, consider:
+      - The actual value added vs. complexity introduced
+      - How the change fits with surrounding code style
+      - The risk of introducing bugs or changing behavior
+   4. Ensure suggested changes don't create overlapping line ranges
+   5. Arrange suggestions in ascending order by line number
+   6. Finally, suggest only the changes that would provide clear improvements
+
+   Remember that smaller, targeted suggestions are often more useful than complete rewrites.
+
+${templates.suggestion_format}
+
+CODE SUGGESTION REQUIREMENTS:
    - CRITICAL: Preserve original indentation and whitespace style precisely
    - CRITICAL: Return suggestions in ascending order by start_row (lowest to highest line numbers)
    - CRITICAL: Suggestion line ranges MUST NOT overlap with each other
@@ -42,10 +64,18 @@ Never suggest changes that would alter the core functionality unless explicitly 
    - Each suggestion is a COMPLETE code snippet that can directly replace the original
    - For function or class suggestions, include the entire definition
    - If two potential suggestions would overlap, choose the more important one or split them into non-overlapping changes
-   - Respect existing naming conventions, even if you would personally use different ones")
+   - Respect existing naming conventions, even if you would personally use different ones
 
-(defvar relysium-prompt-suggest-example
-  "Example:
+{{if using_region}}
+Region-specific instructions:
+   - You are analyzing a selected region of a larger file
+   - Focus your suggestions ONLY on the code within the provided line range
+   - All suggestions MUST be within the bounds of the selection (from start_line to end_line inclusive)
+   - Be aware that the selected region may be a partial function or class definition
+   - The line numbers in your suggestions should match the absolute line numbers in the file
+{{endif}}
+
+Example:
 
 Source code with line numbers:
 1: def calculate_total(items):
@@ -82,78 +112,26 @@ Your response: (Important: Suggestions should be sorted by start_row and MUST NO
     return total
 </suggestion>")
 
-(defvar relysium-prompt-suggest-contextual-analysis
-  "Code Analysis Process:
-   1. First examine the code thoroughly, looking for:
-      - Unclear or missing documentation
-      - Potentially buggy code patterns
-      - Inefficient implementations
-      - Inconsistent styling
-      - Missing error handling
-      - Code duplications or repetitions
-      - Opportunities for better abstractions
-   2. Then consider the user's specific request, prioritizing those aspects
-   3. For each potential improvement, consider:
-      - The actual value added vs. complexity introduced
-      - How the change fits with surrounding code style
-      - The risk of introducing bugs or changing behavior
-   4. Ensure suggested changes don't create overlapping line ranges
-   5. Arrange suggestions in ascending order by line number
-   6. Finally, suggest only the changes that would provide clear improvements
 
-   Remember that smaller, targeted suggestions are often more useful than complete rewrites.")
-
-;; Add region specific instructions
-(defvar relysium-prompt-suggest-region-guidelines
-  "Region-specific instructions:
-   - You are analyzing a selected region of a larger file
-   - Focus your suggestions ONLY on the code within the provided line range
-   - All suggestions MUST be within the bounds of the selection (from start_line to end_line inclusive)
-   - Be aware that the selected region may be a partial function or class definition
-   - The line numbers in your suggestions should match the absolute line numbers in the file")
-
-;; System prompt builder for suggest command
-(defun relysium-prompt-suggest-system (using-region)
-  "Build the system prompt for suggest command.
-If USING-REGION is non-nil, include region-specific instructions."
-  (let ((components (list
-                     :a_intro relysium-prompt-suggest-base
-                     :b_analysis relysium-prompt-suggest-contextual-analysis
-                     :c_format relysium-prompt-template-multi-suggestion-format
-                     :d_guidelines relysium-prompt-suggest-guidelines)))
-
-    ;; Add region-specific guidelines if working with a region
-    (when using-region
-      (setq components (plist-put components :d2_region_guidelines
-                                  relysium-prompt-suggest-region-guidelines)))
-
-    ;; Always add the example at the end
-    (setq components (plist-put components :e_example relysium-prompt-suggest-example))
-
-    (relysium-build-prompt components)))
-
-
+;; User prompt template using simple-template format
 (defvar relysium-prompt-suggest-user-template
-  "File type: ${language-name}
+  "File type: ${language_name}
 
+{{if using_region}}
+Selected region (lines: ${start_line} - ${end_line}):
+
+```${language_name}
+${source_code}
+```
+{{else}}
 Source code:
 
-```${language-name}
-${source-code}
+```${language_name}
+${source_code}
 ```
+{{endif}}
 
-Task: ${user-query}
-")
-
-(defvar relysium-prompt-suggest-region-template
-  "Selected region (lines: ${start-line} - ${end-line}):
-
-```${language-name}
-${source-code}
-```
-
-Task: ${user-query}
-")
+Task: ${user_query}")
 
 ;;;###autoload
 (defun relysium-suggest (user-query)
@@ -164,21 +142,26 @@ USER-QUERY specifies the type of improvements to suggest."
   (interactive "sInstruction: ")
 
   (let* ((context (relysium-context-gather))
-         (using-region (plist-get context :using-region))
-         (system-prompt (relysium-prompt-suggest-system using-region))
-         (template (if using-region
-                       relysium-prompt-suggest-region-template
-                     relysium-prompt-suggest-user-template))
+         (using-region (plist-get context :using_region))
          (code-to-format (if using-region
-                             (plist-get context :selected-code)
-                           (plist-get context :buffer-content)))
+                             (plist-get context :selected_code)
+                           (plist-get context :buffer_content)))
          (formatted-code (relysium-format-with-line-numbers
                           code-to-format
-                          (if using-region (plist-get context :start-line) 1)))
-         (user-prompt (relysium-render-template
-                       template
-                       (plist-put (plist-put context :user-query user-query)
-                                  :source-code formatted-code))))
+                          (if using-region (plist-get context :start_line) 1)))
+
+         ;; Prepare template context
+         (template-context (append context (list :source_code formatted-code
+                                                 :user_query (or user-query "")
+                                                 :templates relysium-base-templates)))
+
+         (system-prompt (simple-template-render-template
+                         relysium-prompt-suggest-system
+                         template-context))
+         ;; Render the user prompt template
+         (user-prompt (simple-template-render-template
+                       relysium-prompt-suggest-user-template
+                       template-context)))
 
     ;; Store the current context in the request for later use
     (relysium-core-request

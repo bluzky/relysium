@@ -29,6 +29,9 @@
   </suggestion>
 - DO NOT include explanations outside the suggestion tags")
 
+(defvar relysium-base-templates (list
+                                 :suggestion_format relysium-prompt-template-multi-suggestion-format))
+
 (provide 'relysium-prompt-template)
 
 ;;; relysium-prompt-template.el ends here
