@@ -1,30 +1,30 @@
-;;; relysium-complete-cursor.el --- Prompts for code completion -*- lexical-binding: t; -*-
+;;; relysium-complete.el --- Prompts for code completion -*- lexical-binding: t; -*-
 
 ;;; Commentary:
 ;;
 ;; This file contains the prompt components and builders for the code completion
 ;; at point functionality.
+;; Uses simple-template.el for template rendering.
 
 ;;; Code:
 (require 'relysium-utils)
 (require 'relysium-core)
 (require 'relysium-context)
 (require 'relysium-commands)
+(require 'simple-template)
 
 ;; Base prompt components
-(defvar relysium-prompt-complete-cursor-base
+(defvar relysium-prompt-complete-cursor-system
   "Act as an expert software developer specializing in the current language.
-Your task is to generate code that would complete or extend the functionality at the cursor position in the provided code. Follow these instructions precisely:")
+Your task is to generate code that would complete or extend the functionality at the cursor position in the provided code. Follow these instructions precisely:
 
-(defvar relysium-prompt-complete-cursor-guidelines
-  "1. Analyze the code context thoroughly to understand what the user is trying to accomplish.
+1. Analyze the code context thoroughly to understand what the user is trying to accomplish.
 2. If the cursor is inside a function, generate code that completes that function's logic.
 3. If the cursor is outside any function, generate appropriate code based on the user's task description.
 4. The generated code MUST be syntactically valid and match the style of the surrounding code.
-5. Maintain consistent naming conventions, indentation style, and comment style.")
+5. Maintain consistent naming conventions, indentation style, and comment style.
 
-(defvar relysium-prompt-complete-cursor-format
-  "Response format rules:
+Response format rules:
 - Return ONLY the code to be inserted, nothing else.
 - Wrap your code in <code></code> tags.
 - Place your <code> tag on its own line.
@@ -32,10 +32,9 @@ Your task is to generate code that would complete or extend the functionality at
 - Do NOT include explanations or commentary outside the code tags.
 - The code will REPLACE the current line at the cursor position.
 - Ensure your response maintains proper indentation relative to the surrounding code.
-- If you need to generate a multi-line solution, ensure all lines have correct indentation.")
+- If you need to generate a multi-line solution, ensure all lines have correct indentation.
 
-(defvar relysium-prompt-complete-cursor-example
-  "Here's an example interaction:
+Here's an example interaction:
 
 USER:
 File type: python
@@ -67,59 +66,51 @@ The cursor is positioned at line 12: # Calculate total here
 
 Task: Complete the calculation of the total price by adding up the price * quantity for each item
 
-ASSISTANT:
+A:
 <code>
     for item in items:
         total += item['price'] * item['quantity']
-</code>
-")
+</code>")
 
-;; Function to build the system prompt
-(defun relysium-prompt-complete-cursor-system ()
-  "Build the system prompt for code completion at point."
-  (relysium-build-prompt
-   (list
-    :a_intro relysium-prompt-complete-cursor-base
-    :b_guidelines relysium-prompt-complete-cursor-guidelines
-    :c_format relysium-prompt-complete-cursor-format
-    :d_example relysium-prompt-complete-cursor-example
-    )))
+;; User prompt template using simple-template format
+(defvar relysium-prompt-complete-cursor-user-template
+  "File type: ${language_name}
+Cursor line: ${cursor_line}
 
-;; Function to build the user prompt
-(defun relysium-prompt-complete-cursor-user (context user-query)
-  "Build the user prompt for code completion with CONTEXT and USER-QUERY."
-  (let* ((lang-name (plist-get context :language-name))
-         (cursor-line (plist-get context :cursor-line))
-         (buffer-content (plist-get context :buffer-content))
-         (cursor-line-content (save-excursion
-                                (goto-char (point-min))
-                                (forward-line (1- cursor-line))
-                                (buffer-substring-no-properties
-                                 (line-beginning-position)
-                                 (line-end-position)))))
+Full source code:
+```${language_name}
+${buffer_content}
+```
 
-    (relysium-build-prompt
-     (list
-      :a_file_info (format "File type: %s\nCursor line: %d" lang-name cursor-line)
-      :b_code (format "Full source code:\n%s"
-                      (relysium-format-code-block lang-name buffer-content))
-      :c_cursor_pos (format "The cursor is positioned at line %d: %s"
-                            cursor-line cursor-line-content)
-      :d_task (format "Task: %s" user-query)
-      ))))
+The cursor is positioned at line ${cursor_line}: ${cursor_line_content}
+
+Task: ${user_query}")
 
 ;;;###autoload
-(defun relysium-complete-cursor (user-query)
+(defun relysium-complete (user-query)
   "Generate code at the current cursor position based on USER-QUERY."
   (interactive "sTask description: ")
 
   (let* ((context (relysium-context-gather))
+         ;; Get the content of the cursor line
+         (cursor-line-content (save-excursion
+                                (goto-char (point-min))
+                                (forward-line (1- (plist-get context :cursor_line)))
+                                (buffer-substring-no-properties
+                                 (line-beginning-position)
+                                 (line-end-position))))
+
+         ;; Add cursor line content to context for template rendering
+         (template-context (append context (list :cursor_line_content cursor-line-content
+                                                 :user_query user-query)))
+
          (system-prompt (relysium-prompt-complete-cursor-system))
-         (user-prompt (relysium-prompt-complete-cursor-user context "")))
+         (user-prompt (simple-template-render-template
+                       relysium-prompt-complete-cursor-user-template
+                       template-context)))
 
     (relysium-core-request
-     (list :user-query user-query
-           :context context
+     (list :context context
            :system-prompt system-prompt
            :user-prompt user-prompt
            :response-handler #'relysium-core-process-code-block
@@ -135,7 +126,7 @@ ASSISTANT:
         (relysium-discard-all-changes)
 
         ;; Execute the new query
-        (relysium-complete-cursor new-query)))))
+        (relysium-complete new-query)))))
 
-(provide 'relysium-complete-cursor)
-;;; relysium-complete-cursor.el ends here
+(provide 'relysium-complete)
+;;; relysium-complete.el ends here

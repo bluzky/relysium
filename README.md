@@ -56,7 +56,7 @@ https://github.com/user-attachments/assets/d5f735d5-035e-4b48-b9f0-d0566360b01c
    - Uses a clear pattern of "AI:" comment markers
 
 2. **AI-powered code completion at cursor**
-   - Implemented through `relysium-complete-cursor.el`
+   - Implemented through `relysium-complete.el`
    - Context-aware with buffer understanding, extends code at current cursor position
 
 3. **Code explanation capabilities**
@@ -106,7 +106,7 @@ Relysium provides several ways to interact with AI models to improve your coding
 | `relysium-ask`                   | `C-c a`      | Ask questions about selected code                             |
 | `relysium-suggest`               | `C-c e s`    | Get improvement suggestions for the entire buffer             |
 | `relysium-generate-from-comments`| `C-c e g`    | Generate code based on `AI:` comments                        |
-| `relysium-complete-cursor`       | `C-c e p`    | Complete code at the current cursor position                  |
+| `relysium-complete`       | `C-c e p`    | Complete code at the current cursor position                  |
 | `relysium-buffer-toggle-window`  | `C-c e t`    | Toggle the Relysium chat window                               |
 | `relysium-buffer-clear`          | `C-c e c`    | Clear the Relysium buffer                                     |
 | `relysium-buffer-add-context`    | `C-c e b`    | Add region or buffer content to the Relysium buffer           |
@@ -140,7 +140,7 @@ When AI suggests changes, a transient menu will appear with these options:
 
 ### Getting Code Completion
 1. Position your cursor where you want code to be inserted
-2. Press `C-<return>` (or `M-x relysium-complete-cursor`)
+2. Press `C-<return>` (or `M-x relysium-complete`)
 3. Enter a description of what code you want to generate
 4. Review and accept/reject the suggested code
 
