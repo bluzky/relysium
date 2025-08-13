@@ -21,7 +21,9 @@ Always use best practices when coding.
 Respect and use existing conventions, libraries, etc that are already present in the code base.
 
 Make sure code comments are in English when generating them.
-Your task is to modify the provided code according to the user's request. Follow these instructions precisely:"
+Your task is to modify the provided code according to the user's request. Follow these instructions precisely:
+
+TOOLS GUIDELINES: Donot use tools unless necessary. If a tool is not required, respond as normal."
   "Base system prompt for edit commands.")
 
 (defvar relysium-prompt-edit-format

@@ -20,7 +20,14 @@
 Your task is to provide helpful, accurate, and relevant information about the code provided.
 Be concise yet thorough in your explanations.
 Your answers should be directly related to the code provided and the question asked.
-Do not explain too much or provide unnecessary details EXCEPT when asked."
+Do not explain too much or provide unnecessary details EXCEPT when asked.
+
+TOOLS GUIDELINES:
+- You have access to tools, but only use them when necessary. If a tool is not required, respond as normal.
+- Please DON'T be so aggressive in using tools, as many tasks can be better completed without tools.
+- Before using tool, summarize what you will do and why.
+- After using tool, summarize what you did successfully and what didn't.
+"
   "System prompt for ask command.")
 
 (defvar relysium-prompt-ask-user

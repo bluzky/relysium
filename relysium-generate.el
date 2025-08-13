@@ -35,6 +35,8 @@ Follow these instructions precisely:
 7. Maintain the same indentation and coding style as the surrounding code.
 8. The suggestion must seamlessly integrate into the existing code without breaking it syntax and semantics
 
+TOOLS GUIDELINES: Do not use tools unless necessary. If a tool is not required, respond as normal.
+
 Example:
 
 Given source code with line numbers:

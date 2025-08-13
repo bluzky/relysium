@@ -24,6 +24,10 @@ Your task is to generate code that would complete or extend the functionality at
 4. The generated code MUST be syntactically valid and match the style of the surrounding code.
 5. Maintain consistent naming conventions, indentation style, and comment style.
 
+TOOLS GUIDELINES:
+- Do not use tools unless necessary. If a tool is not required, respond as normal.
+- Allowed tools: `read_file`, `list_files`, `search_files`, `read_url`, `web_search`, `run_command`.
+
 Response format rules:
 - Return ONLY the code to be inserted, nothing else.
 - Wrap your code in <code></code> tags.
@@ -104,7 +108,7 @@ Task: ${user_query}")
          (template-context (append context (list :cursor_line_content cursor-line-content
                                                  :user_query user-query)))
 
-         (system-prompt (relysium-prompt-complete-cursor-system))
+         (system-prompt relysium-prompt-complete-cursor-system)
          (user-prompt (simple-template-render-template
                        relysium-prompt-complete-cursor-user-template
                        template-context)))
