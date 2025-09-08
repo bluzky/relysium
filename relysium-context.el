@@ -10,7 +10,8 @@
 (defun relysium-context-gather (&optional selection-only)
   "Gather context information from the current buffer.
 When SELECTION-ONLY is non-nil, only include selected code.
-Returns a plist with context information."
+Returns a plist with context information using underscore separators in keys
+for compatibility with simple-template.el."
   (let* ((using-region (use-region-p))
          (cursor-pos (point))
          (cursor-line (line-number-at-pos cursor-pos))
@@ -47,16 +48,17 @@ Returns a plist with context information."
          (adjustment-result (when using-region
                               (relysium-context-trim-adjust selected-code start-line end-line))))
 
-    ;; Build the context plist
-    (list :using-region using-region
-          :cursor-pos cursor-pos
-          :cursor-line cursor-line
-          :file-type file-type
-          :language-name lang-name
-          :start-line (if adjustment-result (nth 1 adjustment-result) start-line)
-          :end-line (if adjustment-result (nth 2 adjustment-result) end-line)
-          :selected-code (if adjustment-result (nth 0 adjustment-result) selected-code)
-          :buffer-content buffer-content)))
+    ;; Build the context plist with underscore keys for template compatibility
+    (list :using_region using-region
+          :cursor_pos cursor-pos
+          :cursor_line cursor-line
+          :file_type file-type
+          :language_name lang-name
+          :start_line (if adjustment-result (nth 1 adjustment-result) start-line)
+          :end_line (if adjustment-result (nth 2 adjustment-result) end-line)
+          :selected_code (if adjustment-result (nth 0 adjustment-result) selected-code)
+          :buffer_content buffer-content
+          :buffer_name (buffer-name))))
 
 (defun relysium-context-trim-adjust (string start-line end-line)
   "Trim leading and trailing empty lines and adjust line numbers.

@@ -4,6 +4,7 @@
 ;;
 ;; This file contains the prompt components and builders for the code generation
 ;; from comments functionality.
+;; Uses simple-template.el for template rendering.
 
 ;;; Code:
 
@@ -12,16 +13,15 @@
 (require 'relysium-context)
 (require 'relysium-commands)
 (require 'relysium-prompt-template)
+(require 'simple-template)
 
-
-;; Base prompt components
-(defvar relysium-prompt-generate-base
+;; Common components that could be shared across commands
+(defvar relysium-prompt-generate-system
   "Act as an expert software developer specialized in the current programming language.
 Your task is to analyze special comments that start with 'AI:' and generate code to fulfill those tasks.
-Follow these instructions precisely:")
+Follow these instructions precisely:
 
-(defvar relysium-prompt-generate-guidelines
-  "1. Look for comments that start with 'AI:' followed by a task description
+1. Look for comments that start with 'AI:' followed by a task description
 2. Generate appropriate code to fulfill each task
 3. If the comment is inside a function:
    - The generated code must seamlessly work with the existing code
@@ -33,10 +33,11 @@ Follow these instructions precisely:")
 5. The generated code must be syntactically valid and follow the conventions of the language
 6. The code suggestion MUST REPLACE the 'AI:' comment line
 7. Maintain the same indentation and coding style as the surrounding code.
-8. The suggestion must seamlessly integrate into the existing code without breaking it syntax and semantics")
+8. The suggestion must seamlessly integrate into the existing code without breaking it syntax and semantics
 
-(defvar relysium-prompt-generate-example
-  "Example:
+TOOLS GUIDELINES: Do not use tools unless necessary. If a tool is not required, respond as normal.
+
+Example:
 
 Given source code with line numbers:
 1: def process_data(items):
@@ -92,43 +93,29 @@ Your response should be:
         'processed': processed,
         'count': len(results)
     }
-</suggestion>")
+</suggestion>
 
-;; Function to build the system prompt
-(defun relysium-prompt-generate-system ()
-  "Build the system prompt for code generation from comments."
-  (relysium-build-prompt
-   (list
-    :a_intro relysium-prompt-generate-base
-    :b_guidelines relysium-prompt-generate-guidelines
-    :c_format relysium-prompt-template-multi-suggestion-format
-    :d_example relysium-prompt-generate-example)))
+${templates.suggestion_format}")
 
-;; Function to build the user prompt
-(defun relysium-prompt-generate-user (context)
-  "Build the user prompt for code generation with CONTEXT."
-  (let* ((lang-name (plist-get context :language-name))
-         (cursor-line (plist-get context :cursor-line))
-         (using-region (plist-get context :using-region))
-         (buffer-content (plist-get context :buffer-content))
-         (selected-code (plist-get context :selected-code))
-         (start-line (plist-get context :start-line))
-         (end-line (plist-get context :end-line))
-         (code-to-analyze (if using-region selected-code buffer-content))
-         (start-line (if using-region (plist-get context :start-line) 1))
-         (annotated-code (relysium-format-with-line-numbers code-to-analyze start-line)))
+;; User prompt template using simple-template format
+(defvar relysium-prompt-generate-user-template
+  "File type: ${language_name}
+{{if using_region}}
+Selected region (lines: ${start_line} - ${end_line}):
 
-    (relysium-build-prompt
-     (list
-      :a_file_info (format "File type: %s\n%s"
-                           lang-name
-                           cursor-line
-                           (if using-region
-                               (format "\nSelected region: lines %d-%d" start-line end-line)
-                             ""))
-      :b_code (format "Source code with line numbers:\n%s"
-                      (relysium-format-code-block lang-name annotated-code))
-      :c_task (format "Please analyze the code and look for comments that start with 'AI:'.\nGenerate code suggestions to fulfill the tasks described in these comments.")))))
+```${language_name}
+${source_code}
+```
+{{else}}
+Source code:
+
+```${language_name}
+${source_code}
+```
+{{endif}}
+
+Please analyze the code and look for comments that start with 'AI:'.
+Generate code suggestions to fulfill the tasks described in these comments.")
 
 ;;;###autoload
 (defun relysium-generate-from-comments ()
@@ -136,12 +123,30 @@ Your response should be:
   (interactive)
 
   (let* ((context (relysium-context-gather))
-         (system-prompt (relysium-prompt-generate-system))
-         (user-prompt (relysium-prompt-generate-user context)))
+         (code-to-format (if (plist-get context :using_region)
+                             (plist-get context :selected_code)
+                           (plist-get context :buffer_content)))
+         (formatted-code (relysium-format-with-line-numbers
+                          code-to-format
+                          (if (plist-get context :using_region)
+                              (plist-get context :start_line) 1)))
 
+         ;; Prepare template context
+         (template-context (append context (list :source_code formatted-code
+                                                 :templates relysium-base-templates)))
+
+         (system-prompt (simple-template-render-template
+                         relysium-prompt-generate-system
+                         template-context))
+         ;; Render the user prompt template
+         (user-prompt (simple-template-render-template
+                       relysium-prompt-generate-user-template
+                       template-context)))
+
+    ;; Store the current context in the request for later use
     (relysium-core-request
-     (list :system-prompt system-prompt
-           :context context
+     (list :context context
+           :system-prompt system-prompt
            :user-prompt user-prompt
            :response-handler #'relysium-core-process-suggestions))))
 

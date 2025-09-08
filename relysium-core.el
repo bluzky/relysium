@@ -160,10 +160,10 @@ OPTIONS is a plist that can include:
 
     ;; Store essential context locally in the chat buffer
     (with-current-buffer chat-buffer
-      (setq-local relysium--using-region (plist-get context :using-region))
-      (setq-local relysium--region-start-line (plist-get context :start-line))
-      (setq-local relysium--region-end-line (plist-get context :end-line))
-      (setq-local relysium--cursor-line (plist-get context :cursor-line)))
+      (setq-local relysium--using-region (plist-get context :using_region))
+      (setq-local relysium--region-start-line (plist-get context :start_line))
+      (setq-local relysium--region-end-line (plist-get context :end_line))
+      (setq-local relysium--cursor-line (plist-get context :cursor_line)))
 
     ;; Log debug information
     (relysium-debug-log "System Prompt:\n%s" system-prompt)

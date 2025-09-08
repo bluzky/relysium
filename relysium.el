@@ -35,7 +35,7 @@
 (require 'relysium-edit)
 (require 'relysium-ask)
 (require 'relysium-suggest)
-(require 'relysium-complete-cursor)
+(require 'relysium-complete)
 (require 'relysium-generate)
 
 ;; Debugging utilities
@@ -57,7 +57,7 @@ This provides a single entry point for the most common AI assistance tasks."
       ;; With active region, use edit to modify selected code
       (relysium-edit user-query)
     ;; Without region, use complete-at-point for code completion
-    (relysium-complete-cursor user-query)))
+    (relysium-complete user-query)))
 
 
 ;;;###autoload
